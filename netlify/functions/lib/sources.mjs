@@ -95,3 +95,16 @@ export async function makeUsage(env) {
   }
   return data.data.map(row => ({ date: row.date, credits: number(row.centicredits) / 100 }));
 }
+
+export async function cashBalance(env) {
+  const url = new URL(required(env, 'CASH_BALANCE_URL'));
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid cash balance URL');
+  const token = required(env, 'CASH_BALANCE_TOKEN');
+  const data = await readJson(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, cache: 'no-store' });
+  const balance = number(data?.balance);
+  const timestamp = typeof data?.asOf === 'string' && /T.*(?:Z|[+-]\d\d:\d\d)$/.test(data.asOf) ? Date.parse(data.asOf) : NaN;
+  if (balance === null || data.currency !== 'USD' || !Number.isFinite(timestamp) || timestamp > Date.now()) {
+    throw new Error('Invalid USD cash balance or timestamp');
+  }
+  return { balance, asOf: new Date(timestamp).toISOString() };
+}

@@ -103,10 +103,10 @@ export function workforce(data, today) {
   return { workers: people.size, jobs: jobIds.size, asOf: today };
 }
 
-export function runway(ledger, env, today) {
-  const cash = number(env.CASH_ON_HAND_USD);
+export function runway(ledger, cashFeed, env, today) {
+  const cash = number(cashFeed?.balance);
   const verified = number(env.MONTHLY_CASH_BURN_USD);
-  const asOf = day(env.CASH_AS_OF);
+  const asOf = day(cashFeed?.asOf);
   const observedRange = { from: shift(today, -90), to: shift(today, -1) };
   const observed = ledger?.bills
     .flatMap(bill => bill.payments || [])
@@ -116,7 +116,7 @@ export function runway(ledger, env, today) {
   const monthlyBurn = verified !== null && verified > 0 ? verified : observedTotal > 0 ? observedTotal / 3 : null;
   return {
     cash: asOf && asOf <= today && cash !== null ? cash : null,
-    asOf: asOf && asOf <= today ? asOf : null,
+    asOf: asOf && asOf <= today ? cashFeed.asOf : null,
     monthlyBurn,
     basis: verified > 0 ? 'Verified monthly burn input' : 'Ledger bill payments over the previous 90 days ÷ 3',
     estimated: !(verified > 0),

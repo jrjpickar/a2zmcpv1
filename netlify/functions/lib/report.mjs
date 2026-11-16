@@ -1,5 +1,5 @@
 import { number } from './http.mjs';
-import { containerSales, exportFeed, makeUsage, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
+import { cashBalance, containerSales, exportFeed, makeUsage, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
 import { containerSales as summarizeContainers, day, funnel, laborSales, makeCreditBalance, rangeFor, runway, workforce } from './metrics.mjs';
 
 const cache = new WeakMap();
@@ -18,6 +18,7 @@ function sample(today) {
     dispatch: { jobs: [{ jobId: 'a', active: true, reportDate: today, crew: Array.from({ length: 14 }, (_, id) => ({ id: 'w' + id })) }],
       bookings: [{ kind: 'job', jobType: 'hourly', at: today, opportunityId: 'lab', monetaryValue: 9200 }],
       health: { pendingGhlScheduleSyncs: 2, makeRuns30d: [{ ok: 113, bad: 3 }] } },
+    cash: { balance: 82000, asOf: today + 'T12:00:00Z' },
     ledger: { bills: [{ payments: [{ amount: 87000, date: salesDay }] }] },
     ghl: [{ id: 'con', status: 'won', value: 5400, at: today }],
     twilio: { balance: 48.72, currency: 'USD', asOf: today },
@@ -37,6 +38,7 @@ async function readSources(env, today) {
   const tasks = {
     estimating: source(() => exportFeed(env, 'ESTIMATING', ['opportunities', 'pipelines'], signal)),
     dispatch: source(() => exportFeed(env, 'DISPATCH', ['jobs', 'bookings'], signal)),
+    cash: source(() => cashBalance(env)),
     ledger: source(() => exportFeed(env, 'LEDGER', ['bills'], signal)),
     ghl: source(() => containerSales(env, signal)),
     twilio: source(() => twilioBalance(env)),
@@ -65,10 +67,10 @@ export async function report(input = {}, env = process.env, now = new Date()) {
   const range = rangeFor(input, now);
   const today = day(now);
   const sources = await cachedSources(env, today);
-  const { estimating, dispatch, ledger, ghl, twilio, make, builds } = sources;
+  const { estimating, dispatch, ledger, cash, ghl, twilio, make, builds } = sources;
   const demonstration = env.DATA_MODE === 'sample';
   const config = demonstration ? {
-    CASH_ON_HAND_USD: '82000', CASH_AS_OF: today, MONTHLY_CASH_BURN_USD: '29000',
+    MONTHLY_CASH_BURN_USD: '29000',
     MAKE_CYCLE_START: today, MAKE_CYCLE_CREDITS: '5500', NETLIFY_CREDITS_REMAINING: '232', NETLIFY_CREDITS_AS_OF: today,
   } : env;
   const netlifyBalance = number(config.NETLIFY_CREDITS_REMAINING);
@@ -83,10 +85,10 @@ export async function report(input = {}, env = process.env, now = new Date()) {
       labor: dispatch.data ? laborSales(dispatch.data, range) : null,
       containers: ghl.data ? summarizeContainers(ghl.data, range) : null,
       workforce: dispatch.data ? workforce(dispatch.data, today) : null,
-      runway: runway(ledger.data, config, today),
+      runway: runway(ledger.data, cash.data, config, today),
     },
     system: {
-      sources: Object.fromEntries(Object.entries({ estimating, dispatch, ledger, ghl, twilio, make }).map(([name, state]) => [name, status(state)])),
+      sources: Object.fromEntries(Object.entries({ estimating, dispatch, ledger, cash, ghl, twilio, make }).map(([name, state]) => [name, status(state)])),
       deploys: Object.fromEntries(Object.entries(builds).map(([name, result]) => [name, { ...status(result), ...result.data }])),
       make: makeCreditBalance(make.data, config, today),
       netlify: { balance: netlifyDate && netlifyDate <= today && netlifyBalance >= 0 ? netlifyBalance : null,

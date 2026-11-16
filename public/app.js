@@ -63,7 +63,7 @@ function details(tile) {
         deploy.latestState && deploy.latestState !== deploy.state && 'Latest production build ' + deploy.latestState,
       ].filter(Boolean).join(' · '),
     ]);
-    const sourceNames = { estimating: 'Estimating feed', dispatch: 'Dispatch feed', ledger: 'Ledger feed',
+    const sourceNames = { estimating: 'Estimating feed', dispatch: 'Dispatch feed', ledger: 'Ledger feed', cash: 'Cash balance feed',
       ghl: 'GoHighLevel', twilio: 'Twilio API', make: 'Make API' };
     panel.append(rows([
       ['Twilio balance', money(system.twilio?.balance, system.twilio?.currency), system.twilio?.asOf && 'Checked ' + system.twilio.asOf.slice(0, 10)],
@@ -88,7 +88,8 @@ function details(tile) {
     panel.append(rows([['Active jobs with crew', number(kpis.workforce?.jobs)], ['Pacific date', kpis.workforce?.asOf || '—']]));
   } else if (tile.key === 'runway') {
     const r = kpis.runway;
-    panel.append(rows([['Cash on hand', money(r.cash), r.asOf || 'Cash balance and date needed'],
+    panel.append(rows([['Cash on hand', money(r.cash), r.asOf ? 'As of ' + new Date(r.asOf).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', timeZoneName: 'short' })
+        : system.sources.cash?.status === 'setup' ? 'Connect a live cash balance feed' : 'Live cash balance unavailable'],
       ['Monthly cash burn', money(r.monthlyBurn), r.basis]]));
   } else if (tile.key === 'labor' || tile.key === 'containers') {
     const sale = kpis[tile.key];

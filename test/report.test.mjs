@@ -43,10 +43,10 @@ test('active workforce dedupes crews and excludes sent-home and inactive crew', 
 
 test('cash requires an as-of date, and Make does not extrapolate incomplete usage', () => {
   const ledger = { bills: [{ payments: [{ date: '2026-11-14', amount: 9000 }, { date: '2026-08-01', amount: 87000 }] }] };
-  const estimate = runway(ledger, { CASH_ON_HAND_USD: '9000', CASH_AS_OF: today }, today);
+  const estimate = runway(ledger, { balance: 9000, asOf: today }, {}, today);
   assert.equal(estimate.months, 3);
   assert.equal(estimate.estimated, true);
-  assert.equal(runway(ledger, { CASH_ON_HAND_USD: '9000' }, today).months, null);
+  assert.equal(runway(ledger, { balance: 9000 }, {}, today).months, null);
   const usage = [{ date: today, credits: 19 }];
   assert.equal(makeCreditBalance(usage, { MAKE_CYCLE_START: '2026-11-01', MAKE_CYCLE_CREDITS: '100' }, today).balance, 81);
   assert.equal(makeCreditBalance(usage, { MAKE_CYCLE_START: '2026-10-01', MAKE_CYCLE_CREDITS: '100' }, today).balance, null);
@@ -67,6 +67,7 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
   const env = {
     ESTIMATING_URL: 'https://estimating.test', ESTIMATING_EXPORT_KEY: 'estimating-test-key',
     DISPATCH_URL: 'https://dispatch.test', DISPATCH_EXPORT_KEY: 'dispatch-example-key',
+    CASH_BALANCE_URL: 'https://balance.test/available', CASH_BALANCE_TOKEN: 'balance-example-token', MONTHLY_CASH_BURN_USD: '3000',
     GHL_PIT_TOKEN: 'ghl-example-token', TWILIO_ACCOUNT_SID: 'AC' + 'a'.repeat(32), TWILIO_AUTH_TOKEN: 'twilio-example-token',
     ESTIMATING_NETLIFY_SITE_ID: 'demo-est', NETLIFY_ACCESS_TOKEN: 'netlify-example-token',
   };
@@ -79,6 +80,10 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
   };
   const fetch = t.mock.method(globalThis, 'fetch', async (raw, options) => {
     const url = new URL(raw);
+    if (url.hostname === 'balance.test') {
+      assert.equal(options.headers.Authorization, 'Bearer ' + env.CASH_BALANCE_TOKEN);
+      return Response.json({ balance: 9000, currency: 'USD', asOf: '2026-11-15T18:00:00Z' });
+    }
     if (rows[url.hostname]) {
       assert.equal(options.headers['x-metrics-key'], url.hostname === 'dispatch.test' ? env.DISPATCH_EXPORT_KEY : env.ESTIMATING_EXPORT_KEY);
       return Response.json(rows[url.hostname]);
@@ -95,6 +100,8 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
     throw new Error('Unexpected host');
   });
   const response = await report({}, env, now);
+  assert.equal(response.kpis.runway.months, 3);
+  assert.equal(response.kpis.runway.asOf, '2026-11-15T18:00:00.000Z');
   assert.equal(response.kpis.labor.amount, 250);
   assert.equal(response.kpis.containers.amount, 400);
   assert.equal(response.system.sources.twilio.detail, 'Upstream HTTP 403');

@@ -20,9 +20,13 @@ Set runtime variables in each site's Netlify settings. Generate distinct, random
 | A2Z Operations | `MAKE_ZONE`, `MAKE_ORG_ID`, `MAKE_API_TOKEN` | Live organization usage with `organizations:read`. Set the zone hostname, for example `us2.make.com` |
 | A2Z Operations | `MAKE_CYCLE_CREDITS`, `MAKE_CYCLE_START` | Optional cycle allowance and start date in the Make organization's time zone. The estimate uses live usage where the start is covered by the 30-day API window. Update allowance and start on renewal |
 | A2Z Operations | `MAKE_CREDITS_REMAINING`, `MAKE_CREDITS_AS_OF` | Optional dated billing snapshot. Used when the dashboard cannot derive a cycle estimate |
-| A2Z Operations | `CASH_ON_HAND_USD`, `CASH_AS_OF`, optional `MONTHLY_CASH_BURN_USD` | Enter reconciled cash and its date. The fallback burn uses the preceding 90 full days of recorded Ledger bill payments divided by three. It can omit payroll, debt or other outflows recorded elsewhere and excludes collections |
+| A2Z Operations | `CASH_BALANCE_URL`, `CASH_BALANCE_TOKEN`, optional `MONTHLY_CASH_BURN_USD` | The HTTPS cash feed returns the available USD balance and its source timestamp. The fallback burn uses the preceding 90 full days of recorded Ledger bill payments divided by three. It can omit payroll, debt or other outflows recorded elsewhere and excludes collections |
 
-Enter snapshot and cash dates as `YYYY-MM-DD`. Update them when reconciling. Demo mode is enabled only by `DATA_MODE=sample` and serves synthetic figures. Leave this variable unset in production.
+Enter credit snapshot dates as `YYYY-MM-DD`. Update them when reconciling. Demo mode is enabled only by `DATA_MODE=sample` and serves synthetic figures. Leave this variable unset in production.
+
+## Live cash balance
+
+Configure a read-only HTTPS endpoint backed by the bank or treasury system. It must accept `Authorization: Bearer <CASH_BALANCE_TOKEN>` and return JSON with numeric `balance`, `currency` set to `USD`, and the source observation timestamp `asOf` as ISO 8601 with a timezone. Return the combined balance of the operating accounts included in runway. The dashboard uses its existing 90-second source cache and displays the source timestamp. The supplied Ledger has no bank balance feed. The old `CASH_ON_HAND_USD` and `CASH_AS_OF` variables can be removed.
 
 ## Proposal and award history
 
