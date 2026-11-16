@@ -34,11 +34,20 @@ test('funnel keeps stage transitions after advancement and deduplicates a retry'
 });
 
 test('active workforce dedupes crews and excludes sent-home and inactive crew', () => {
-  const job = { active: true, reportDate: today, crew: [{ id: 'x' }, { id: 'y' }], sentHome: [{ id: 'y', reportDate: today }] };
+  const job = { active: true, reportDate: today, crew: [{ id: 'x', name: 'Ana Ruiz', role: 'Foreman' }, { id: 'y' }], sentHome: [{ id: 'y', reportDate: today }] };
+  const wf = workforce({ jobs: [{ ...job, jobId: 'a', name: 'Harbor Plaza' }] }, today);
+  assert.match(wf.crew[0].key, /^[\w-]{10}$/);
+  assert.notEqual(wf.crew[0].key, 'x');
   assert.deepEqual(workforce({ jobs: [
-    { ...job, jobId: 'a' }, { ...job, jobId: 'b' },
+    { ...job, jobId: 'a', name: 'Harbor Plaza' }, { ...job, jobId: 'b' },
     { ...job, jobId: 'c', active: false }, { ...job, reportDate: '2026-11-16', jobId: 'd' },
-  ] }, today), { workers: 1, jobs: 2, asOf: today });
+  ] }, today), { workers: 1, booked: 1, available: null, jobs: 2, asOf: today, crew: [{ key: wf.crew[0].key, name: 'Ana Ruiz', role: 'Foreman', job: 'Harbor Plaza' }], bench: [] });
+  const roster = [{ id: 'x', name: 'Ana Ruiz' }, { id: 'y', name: 'Bo Kim' }, { id: 'z', name: 'Cy Day', role: 'Operator' }, { id: 'q', active: false }, { id: 'r', available: false }];
+  const split = workforce({ jobs: [{ ...job, jobId: 'a' }], workers: roster }, today);
+  assert.equal(split.booked, 1);
+  assert.deepEqual(split.bench.map(({ key, ...p }) => p), [{ name: 'Bo Kim', role: null }, { name: 'Cy Day', role: 'Operator' }]);
+  assert.equal(split.bench[0].key, workforce({ jobs: [], workers: roster }, today).bench[1].key, 'keys stay stable when a worker changes status');
+  assert.equal(split.available, 2);
 });
 
 test('cash requires an as-of date, and Make does not extrapolate incomplete usage', () => {
@@ -55,7 +64,14 @@ test('cash requires an as-of date, and Make does not extrapolate incomplete usag
 test('sample is explicit, while absent live sources stay unavailable', async () => {
   const demo = await report({}, { DATA_MODE: 'sample' }, now);
   assert.equal(demo.kpis.workforce.workers, 14);
+  assert.equal(demo.kpis.workforce.available, 8);
   assert.equal(demo.system.twilio.balance, 48.72);
+  assert.equal(demo.kpis.containers.amount, 7250);
+  assert.equal(demo.kpis.pipelines.length, 3);
+  assert.ok(!demo.kpis.pipelines.some(p => /multiple/i.test(p.name)));
+  const demoJobs = demo.kpis.pipelines.find(p => p.name === 'Demolition Bids').jobs;
+  assert.deepEqual(demoJobs.map(j => j.value), [48500, 21750, 12400, 6800]);
+  assert.equal(demo.kpis.pipelines.find(p => p.name === 'Labor').jobs.at(-1).value, null);
   const live = await report({}, {}, now);
   assert.equal(live.mode, 'live');
   assert.equal(live.kpis.labor, null);
@@ -90,7 +106,13 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
     }
     if (url.hostname === 'services.leadconnectorhq.com') {
       assert.equal(options.headers.Authorization, 'Bearer ' + env.GHL_PIT_TOKEN);
-      return Response.json({ opportunities: [{ id: '1', status: 'won', lastStatusChangeAt: today, monetaryValue: 400 }], meta: { total: 1 } });
+      if (url.pathname === '/opportunities/pipelines') return Response.json({ pipelines: [{ id: 'F8i8hB7E5xHrJbJUXFr4', name: 'Containers' }, { id: 'main', name: 'Demolition' }] });
+      assert.equal(url.searchParams.has('pipeline_id'), false);
+      return Response.json({ opportunities: [
+        { id: '1', pipelineId: 'F8i8hB7E5xHrJbJUXFr4', status: 'won', lastStatusChangeAt: today, monetaryValue: 400 },
+        { id: '2', pipelineId: 'main', status: 'won', lastStatusChangeAt: today, monetaryValue: 1500 },
+        { id: '3', pipelineId: 'main', status: 'won', lastStatusChangeAt: '2026-10-02', monetaryValue: 900 },
+      ], meta: { total: 3 } });
     }
     if (url.hostname === 'api.twilio.com') return Response.json({}, { status: 403 });
     if (url.hostname === 'api.netlify.com') {
@@ -104,6 +126,8 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
   assert.equal(response.kpis.runway.asOf, '2026-11-15T18:00:00.000Z');
   assert.equal(response.kpis.labor.amount, 250);
   assert.equal(response.kpis.containers.amount, 400);
+  assert.deepEqual(response.kpis.pipelines.map(p => [p.name, p.count, p.amount]), [['Demolition', 1, 1500], ['Containers', 1, 400]]);
+  assert.deepEqual(response.kpis.pipelines[0].jobs, [{ id: '2', name: 'Untitled opportunity', value: 1500, at: today }]);
   assert.equal(response.system.sources.twilio.detail, 'Upstream HTTP 403');
   assert.equal(response.system.deploys.Estimating.state, 'ready');
   assert.equal(response.system.deploys.Estimating.latestState, 'error');

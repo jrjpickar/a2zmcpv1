@@ -59,6 +59,34 @@ Example body with placeholder values:
 
 The handler keeps events after an opportunity advances and deduplicates retries. Counts use one first observed event per opportunity. Before event coverage starts, current GHL stage and status timestamps provide a partial backfill. Historical proposals and awards that have already advanced can be loaded through the same endpoint if verified timestamps are available.
 
+## HQ and Groq
+
+Click A2Z HQ in the city. It shows rule-based signals (Act, Watch, Good) at once, then a 3 bullet Groq overview. The prompt below it answers questions from the same numbers. `POST /api/ask` uses `GROQ_API_KEY` and `openai/gpt-oss-120b` (override with `GROQ_MODEL`, cap with `GROQ_MAX_TOKENS`, default 900 including reasoning). Groq only runs when someone opens HQ or asks. The same question on the same data reuses the answer for 10 minutes. Only aggregates are sent: no crew names or contact data.
+
+## Pipeline sales
+
+Multiple GCs Bidding is excluded from sales by name and by `GHL_MULTI_GC_PIPELINE_ID` when set. Add more IDs with `SALES_EXCLUDE_PIPELINE_IDS` (comma separated). Proposal counts still include Multiple GCs bids.
+
+## System health PC
+
+Top fans are the Netlify deploys, RAM sticks are the data feeds. Healthy parts cycle RGB. Setup parts turn amber and slow down. Failed parts stall and flash red. The front power light shows the worst status.
+
+## Live updates and Netlify cost
+
+The page makes one request per refresh: `/api/metrics` now includes triggered alerts, and `/api/alerts` is only called on the Alerts page. It refreshes every 2 minutes while someone is using the page, every 10 minutes after 10 idle minutes, and never while the tab is hidden. One open, active tab is about 30 function calls an hour. Upstream reads are cached for 90 seconds per function instance. Between refreshes the city animates in the browser at no cost.
+
+On each refresh the city compares with the last one: a blue car drives New leads to Proposals sent per new proposal, a gold car drives Proposals sent to Jobs won per new win, and a worker who changed between booked and available walks across. Workers are matched by a hashed Dispatch ID, never the raw ID or phone.
+
+## Alerts
+
+Open **Alerts** in the header. Every metric on the dashboard can have one rule: above or below a threshold for numbers, or not healthy for feeds and deploys. Sales rules also take a period. Rules, the webhook URL (default is the A2Z Make webhook) and the cooldown are saved in Netlify Blobs. Saving or sending needs the dashboard key.
+
+`alerts-scheduled` runs every 15 minutes and exits early when alerts are off or no rule is enabled. Each triggered rule posts once, then waits out the cooldown. A rule that recovers can post again on its next breach. Sample mode only posts with `ALERT_ALLOW_SAMPLE=1`. The Make payload: `event` (`alert.triggered` or `alert.test`), `sentAt`, `count`, `summary`, and `alerts[]` with `id`, `metric`, `group`, `condition`, `threshold`, `value`, `valueText`, `period`, `range`, `severity`, `message`.
+
+## Workforce
+
+Booked crew comes from today's active Dispatch jobs. Available crew needs a `workers` array in the Dispatch export (`id` or `phone`, `name`, optional `role`, `active`, `available`). Until Dispatch sends it, the dashboard shows available as not reported.
+
 ## Checks after deployment
 
 1. Open the dashboard and enter its access key. A GHL Custom Page can use the dashboard origin and prompt for the key.

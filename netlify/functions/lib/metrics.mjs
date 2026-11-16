@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto';
 import { number } from './http.mjs';
+
+// Stable, non-reversible worker key so the page can follow one person between refreshes.
+const workerKey = id => createHash('sha256').update(String(id)).digest('base64url').slice(0, 10);
 
 const pacific = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' });
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -85,9 +89,35 @@ export const containerSales = (rows, range) => ({
   missingDate: rows.filter(r => r.status?.toLowerCase() === 'won' && !day(r.at)).length,
 });
 
+// Bid-only pipelines are left out of sales: Multiple GCs Bidding by name, plus any IDs in `exclude`.
+export const excludedPipeline = (p, exclude = []) => exclude.includes(p.id) || /multiple\s+gcs?\b/i.test(p.name || '');
+
+export function pipelineSales(data, range, containerId, exclude = []) {
+  const skip = new Set((data.pipelines || []).filter(p => excludedPipeline(p, exclude)).map(p => p.id).concat(exclude));
+  const names = new Map((data.pipelines || []).filter(p => !skip.has(p.id)).map(p => [p.id, p.name]));
+  const groups = new Map([...names.keys()].map(id => [id, []]));
+  for (const row of data.opportunities) {
+    if (skip.has(row.pipelineId)) continue;
+    const id = row.pipelineId || 'unassigned';
+    if (!groups.has(id)) groups.set(id, []);
+    groups.get(id).push(row);
+  }
+  const JOBS = 200;
+  return [...groups].map(([id, rows]) => {
+    // Won opportunities in range, highest value first. Missing values sort last.
+    const jobs = rows.filter(r => r.status?.toLowerCase() === 'won' && within(r.at, range))
+      .map(r => ({ id: r.id, name: r.name || 'Untitled opportunity', value: number(r.value), at: day(r.at) }))
+      .sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity) || a.name.localeCompare(b.name));
+    return {
+      id, name: names.get(id) || (id === containerId ? 'Containers' : id === 'unassigned' ? 'No pipeline' : 'Pipeline ' + id.slice(0, 6)),
+      ...containerSales(rows, range), jobs: jobs.slice(0, JOBS), jobsMore: Math.max(0, jobs.length - JOBS),
+    };
+  }).sort((a, b) => b.amount - a.amount || b.count - a.count || a.name.localeCompare(b.name));
+}
+
 export function workforce(data, today) {
   const jobIds = new Set();
-  const people = new Set();
+  const people = new Map();
   const identity = person => person?.id || person?.contactId || (person?.phone || '').replace(/\D/g, '').slice(-10)
     || person?.name?.trim().toLowerCase();
   for (const job of data.jobs) {
@@ -96,11 +126,25 @@ export function workforce(data, today) {
     for (const worker of job.crew || []) {
       const id = identity(worker);
       if (!id || sentHome.has(id) || worker.sentHome === true) continue;
-      people.add(id);
+      if (!people.has(id)) people.set(id, {
+        key: workerKey(id),
+        name: String(worker.name || '').trim() || 'Crew member ' + (people.size + 1),
+        role: String(worker.role || worker.title || '').trim() || null,
+        job: String(job.jobName || job.name || job.title || job.customerName || '').trim() || 'Job ' + job.jobId,
+      });
       jobIds.add(job.jobId);
     }
   }
-  return { workers: people.size, jobs: jobIds.size, asOf: today };
+  // Available: Dispatch roster members who are active and not booked on a job today.
+  const roster = Array.isArray(data.workers) ? data.workers : null;
+  const bench = new Map();
+  for (const person of roster || []) {
+    const id = identity(person);
+    if (!id || people.has(id) || bench.has(id) || person.active === false || person.available === false) continue;
+    bench.set(id, { key: workerKey(id), name: String(person.name || '').trim() || 'Crew member ' + (people.size + bench.size + 1), role: String(person.role || person.title || '').trim() || null });
+  }
+  return { workers: people.size, booked: people.size, available: roster ? bench.size : null, jobs: jobIds.size, asOf: today,
+    crew: [...people.values()], bench: [...bench.values()] };
 }
 
 export function runway(ledger, cashFeed, env, today) {
@@ -139,4 +183,41 @@ export function makeCreditBalance(rows, env, today) {
     balance: capturedAt && capturedAt <= today && captured >= 0 ? captured : null,
     basis: 'Manual billing snapshot', asOf: capturedAt && capturedAt <= today ? capturedAt : null, usage30d,
   };
+}
+
+// Short, rule-based signals for the HQ overview and the model. tone: good, watch, act.
+export function signals(k, s) {
+  const out = [];
+  const usd = v => '$' + Math.round(v).toLocaleString('en-US');
+  const add = (tone, area, text) => out.push({ tone, area, text });
+  const r = k.runway;
+  if (r?.months != null) add(r.months < 1.5 ? 'act' : r.months < 3 ? 'watch' : 'good', 'runway', r.months.toFixed(1) + ' months of runway on ' + usd(r.cash) + ' cash');
+  const f = k.funnel;
+  if (f) {
+    const rate = f.proposals ? f.wins / f.proposals : null;
+    add(rate == null ? 'watch' : rate < 0.2 ? 'watch' : 'good', 'wins', f.leads + ' leads, ' + f.proposals + ' proposals, ' + f.wins + ' wins' + (rate == null ? '' : ' (' + Math.round(rate * 100) + '% win rate)'));
+  }
+  const p = k.pipelines;
+  if (p) {
+    const total = p.reduce((t, x) => t + x.amount, 0), top = p[0];
+    const missing = p.reduce((t, x) => t + x.missingValue, 0);
+    add(total ? 'good' : 'watch', 'pipelines', usd(total) + ' won' + (top?.amount ? ', led by ' + top.name + ' ' + Math.round(top.amount / total * 100) + '%' : ''));
+    if (missing) add('watch', 'pipelines', missing + ' won deal' + (missing === 1 ? '' : 's') + ' missing a dollar value');
+  }
+  if (k.labor) add(k.labor.count ? 'good' : 'watch', 'labor', usd(k.labor.amount) + ' labor booked across ' + k.labor.count + ' booking' + (k.labor.count === 1 ? '' : 's'));
+  const w = k.workforce;
+  if (w) {
+    const pool = w.available == null ? null : w.booked + w.available;
+    add(pool && w.booked / pool < 0.6 ? 'watch' : 'good', 'workforce', w.booked + ' crew booked on ' + w.jobs + ' job' + (w.jobs === 1 ? '' : 's') +
+      (pool ? ', ' + w.available + ' available (' + Math.round(w.booked / pool * 100) + '% utilized)' : ''));
+  }
+  const down = Object.entries(s.sources).filter(([, x]) => x.status === 'error').map(([n]) => n);
+  const setup = Object.entries(s.sources).filter(([, x]) => x.status === 'setup').map(([n]) => n);
+  const deploys = Object.entries(s.deploys).filter(([, d]) => d.status === 'ok' && d.state !== 'ready').map(([n]) => n);
+  if (down.length || deploys.length) add('act', 'system', [down.length && down.join(', ') + ' feed down', deploys.length && deploys.join(', ') + ' deploy not ready'].filter(Boolean).join('; '));
+  else add(setup.length ? 'watch' : 'good', 'system', setup.length ? setup.length + ' feed' + (setup.length === 1 ? '' : 's') + ' still need setup' : 'All feeds connected and deploys live');
+  if (s.twilio?.balance != null && s.twilio.balance < 20) add('act', 'system', 'Twilio balance low at $' + s.twilio.balance.toFixed(2));
+  if (s.dispatch?.makeRuns30d?.bad) add('watch', 'system', s.dispatch.makeRuns30d.bad + ' Dispatch Make runs to review');
+  const rank = { act: 0, watch: 1, good: 2 };
+  return out.sort((a, b) => rank[a.tone] - rank[b.tone]);
 }
