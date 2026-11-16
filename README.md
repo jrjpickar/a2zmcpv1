@@ -20,13 +20,27 @@ Set runtime variables in each site's Netlify settings. Generate distinct, random
 | A2Z Operations | `MAKE_ZONE`, `MAKE_ORG_ID`, `MAKE_API_TOKEN` | Live organization usage with `organizations:read`. Set the zone hostname, for example `us2.make.com` |
 | A2Z Operations | `MAKE_CYCLE_CREDITS`, `MAKE_CYCLE_START` | Optional cycle allowance and start date in the Make organization's time zone. The estimate uses live usage where the start is covered by the 30-day API window. Update allowance and start on renewal |
 | A2Z Operations | `MAKE_CREDITS_REMAINING`, `MAKE_CREDITS_AS_OF` | Optional dated billing snapshot. Used when the dashboard cannot derive a cycle estimate |
-| A2Z Operations | `CASH_BALANCE_URL`, `CASH_BALANCE_TOKEN`, optional `MONTHLY_CASH_BURN_USD` | The HTTPS cash feed returns the available USD balance and its source timestamp. The fallback burn uses the preceding 90 full days of recorded Ledger bill payments divided by three. It can omit payroll, debt or other outflows recorded elsewhere and excludes collections |
+| Accounting Ledger | `BANK_CONNECTIONS_JSON` and, for Plaid, `PLAID_CLIENT_ID`, `PLAID_SECRET`, optional `PLAID_ENV` | Read-only bank balance connections. See the configuration below |
+| A2Z Operations | Optional `MONTHLY_CASH_BURN_USD` | The fallback burn uses the preceding 90 full days of recorded Ledger bill payments divided by three. It can omit payroll, debt or other outflows recorded elsewhere and excludes collections |
 
 Enter credit snapshot dates as `YYYY-MM-DD`. Update them when reconciling. Demo mode is enabled only by `DATA_MODE=sample` and serves synthetic figures. Leave this variable unset in production.
 
 ## Live cash balance
 
-Configure a read-only HTTPS endpoint backed by the bank or treasury system. It must accept `Authorization: Bearer <CASH_BALANCE_TOKEN>` and return JSON with numeric `balance`, `currency` set to `USD`, and the source observation timestamp `asOf` as ISO 8601 with a timezone. Return the combined balance of the operating accounts included in runway. The dashboard uses its existing 90-second source cache and displays the source timestamp. The supplied Ledger has no bank balance feed. The old `CASH_ON_HAND_USD` and `CASH_AS_OF` variables can be removed.
+Deploy the Ledger files to the existing Ledger project and the MCP files to the existing A2Z Operations project. Configure `BANK_CONNECTIONS_JSON` in the Ledger's server-side Netlify variables. Include one entry per connection. Examples:
+
+```json
+[
+  {"provider":"plaid","accessToken":"PLAID_ITEM_ACCESS_TOKEN","accountIds":["USD_OPERATING_ACCOUNT_ID"]},
+  {"provider":"https","url":"https://bank-gateway.example/balance","token":"READ_ONLY_TOKEN"}
+]
+```
+
+- **Plaid** requires `PLAID_CLIENT_ID`, `PLAID_SECRET` and a previously linked Item with access to `/accounts/balance/get`. Obtain the access token through Plaid Link in your Plaid integration. Set `PLAID_ENV=sandbox` only for testing. Production is the default. Include the account IDs of the USD deposit accounts used for runway. The balance check uses available balances and records when Ledger received them.
+- **HTTPS** sends a read-only GET with bearer authentication to a bank or treasury gateway that returns a numeric `balance`, `currency: "USD"`, and an ISO 8601 `asOf` timestamp with timezone. Return funds available from the intended operating accounts.
+- Include each underlying operating account once across all connections. Ledger only exports the combined balance, currency, status and oldest observation time. If any configured connection fails, the total is unavailable and the expense and invoice data still load.
+- The MCP receives the total through the existing `LEDGER_URL` and `LEDGER_EXPORT_KEY` and refreshes on its existing 90-second cache. Remove the old manual cash variables. If you previously set `CASH_BALANCE_URL` or `CASH_BALANCE_TOKEN` on MCP, you can remove them when the Ledger feed is active. Check System Health for the cash balance feed and Financial Runway for the total and timestamp.
+
 
 ## Proposal and award history
 

@@ -35,11 +35,23 @@ async function readSources(env, today) {
   }
 
   const signal = AbortSignal.timeout(16000);
+  const ledger = source(() => exportFeed(env, 'LEDGER', ['bills'], signal));
   const tasks = {
     estimating: source(() => exportFeed(env, 'ESTIMATING', ['opportunities', 'pipelines'], signal)),
     dispatch: source(() => exportFeed(env, 'DISPATCH', ['jobs', 'bookings'], signal)),
-    cash: source(() => cashBalance(env)),
-    ledger: source(() => exportFeed(env, 'LEDGER', ['bills'], signal)),
+    cash: ledger.then(async result => {
+      const bank = result.data?.cashBalance;
+      if (bank?.status === 'ok' && bank.currency === 'USD' && Number.isFinite(bank.balance) && day(bank.asOf)) {
+        return { status: 'ok', data: { balance: bank.balance, asOf: bank.asOf } };
+      }
+      if (bank?.status === 'error' || bank?.status === 'ok') {
+        return { status: 'error', detail: 'Ledger bank balance unavailable' };
+      }
+      if (env.CASH_BALANCE_URL) return source(() => cashBalance(env));
+      if (result.status === 'error') return { status: 'error', detail: 'Ledger export unavailable' };
+      return { status: 'setup', detail: 'Configure a bank connection on the Ledger' };
+    }),
+    ledger,
     ghl: source(() => containerSales(env, signal)),
     twilio: source(() => twilioBalance(env)),
     make: source(() => makeUsage(env)),

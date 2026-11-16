@@ -133,3 +133,24 @@ test('dashboard and MCP require separate keys in live mode', async t => {
   assert.equal((await mcp(request(env.DASHBOARD_KEY))).status, 401);
   assert.equal((await (await mcp(request(env.MCP_KEY))).json()).result.tools[0].name, 'a2z_operating_report');
 });
+
+test('MCP derives runway from the protected Ledger export and rejects a failed bank total', async t => {
+  const env = { LEDGER_URL: 'https://ledger.test', LEDGER_EXPORT_KEY: 'test-ledger-key',
+    MONTHLY_CASH_BURN_USD: '3000', CASH_BALANCE_URL: 'https://previous.test' };
+  let cashBalance = { status: 'ok', balance: 9000, currency: 'USD', asOf: '2026-11-15T18:00:00Z' };
+  const fetch = t.mock.method(globalThis, 'fetch', async (raw, opts) => {
+    assert.equal(new URL(raw).hostname, 'ledger.test');
+    assert.equal(opts.headers['x-metrics-key'], env.LEDGER_EXPORT_KEY);
+    return Response.json({ version: 1, bills: [], cashBalance });
+  });
+  const result = await report({}, env, now);
+  assert.equal(result.kpis.runway.months, 3);
+  assert.equal(result.kpis.runway.asOf, cashBalance.asOf);
+  assert.equal(fetch.mock.callCount(), 1);
+  cashBalance = { status: 'error' };
+  const failed = await report({}, { ...env }, now);
+  assert.equal(failed.kpis.runway.months, null);
+  assert.equal(failed.system.sources.cash.status, 'error');
+  assert.equal(failed.system.sources.ledger.status, 'ok');
+  assert.equal(fetch.mock.callCount(), 2);
+});
