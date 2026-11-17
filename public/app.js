@@ -45,7 +45,7 @@ function tiles() {
     { key: 'proposals', title: 'Proposals sent', short: 'Proposals', value: number(proposals), sub: 'Bids out the door' },
     { key: 'wins', title: 'Jobs won', short: 'Jobs won', value: number(kpis.funnel?.wins),
       sub: proposals ? Math.round(kpis.funnel.wins / proposals * 100) + '% of proposals' : 'Awarded jobs' },
-    { key: 'labor', title: 'Labor sales', short: 'Labor', value: whole(kpis.labor?.amount), sub: kpis.labor ? plural(kpis.labor.count, 'booking') : 'Dispatch' },
+    { key: 'labor', title: 'Labor sales', short: 'Labor', value: whole(kpis.labor?.amount), sub: kpis.labor ? plural(kpis.labor.count, 'job') + ' won' : 'GoHighLevel' },
     { key: 'pipelines', title: 'Pipeline sales', short: 'Pipelines', value: whole(pipelines?.reduce((t, p) => t + p.amount, 0)),
       sub: pipelines ? plural(won, 'win') + ' · ' + plural(pipelines.filter(p => p.count).length, 'pipeline') : 'GoHighLevel' },
     { key: 'workforce', title: 'Workforce', short: 'Workforce', value: kpis.workforce ? number(kpis.workforce.workers) + ' booked' + (kpis.workforce.available == null ? '' : ' · ' + number(kpis.workforce.available) + ' available') : '-',
@@ -159,8 +159,8 @@ async function runAsk(out, question, button, stamp) {
 }
 
 // Jobs won: one dropdown per pipeline, won opportunities sorted by value.
-function wonByPipeline(panel, items) {
-  panel.append(node('h3', 'Won by pipeline', 'crew-title'));
+function wonByPipeline(panel, items, title = 'Won by pipeline') {
+  panel.append(node('h3', title, 'crew-title'));
   if (!items) { panel.append(node('p', 'GoHighLevel sales unavailable.', 'muted')); return; }
   const list = items.filter(p => p.count);
   if (!list.length) { panel.append(node('p', 'No won opportunities in this period.', 'muted')); return; }
@@ -237,7 +237,7 @@ function details(tile) {
       ? 'Event history begins when the workflow is enabled. Earlier stage moves may be missing.'
       : history === 'unavailable' ? 'Event history unavailable. Counts use current pipeline data only.'
         : 'Counts use current pipeline data. Enable event capture to retain future stage changes.', 'muted'));
-    if (tile.key === 'wins') wonByPipeline(panel, kpis.pipelines);
+    if (tile.key === 'wins') wonByPipeline(panel, kpis.pipelines && [...kpis.pipelines, ...(kpis.labor ? [kpis.labor] : [])].sort((a, b) => b.amount - a.amount));
   } else if (tile.key === 'workforce') {
     const wf = kpis.workforce;
     const people = roster();
@@ -275,7 +275,9 @@ function details(tile) {
         : system.sources.cash?.status === 'setup' ? 'Connect a live cash balance feed' : 'Live cash balance unavailable'],
       ['Monthly cash burn', money(r.monthlyBurn), r.basis]]));
   } else if (tile.key === 'labor') {
-    panel.append(rows([['Sales counted', number(kpis.labor?.count)], ['Sales missing value', number(kpis.labor?.missingValue)]]));
+    if (!kpis.labor) { panel.append(node('p', report.system.sources.ghl?.status === 'ok' ? 'No Labor pipeline found in GoHighLevel. Set LABOR_PIPELINE_ID.' : 'GoHighLevel sales unavailable.', 'muted')); return; }
+    panel.append(rows([['Jobs won', number(kpis.labor.count)], ['Won jobs missing value', number(kpis.labor.missingValue)], ['Pipeline', kpis.labor.name]]));
+    wonByPipeline(panel, [kpis.labor], 'Labor jobs won');
   } else if (tile.key === 'pipelines') {
     const box = node('div', undefined, 'compact');
     pipelineList(box, kpis.pipelines);
@@ -463,11 +465,87 @@ $('check').addEventListener('click', () => alertRequest('POST', { action: 'check
   || (d.sent ? 'Sent ' + d.sent + ' new alert' + (d.sent === 1 ? '.' : 's.') : d.triggered ? d.triggered + ' triggered, all inside cooldown.' : 'Nothing triggered.')));
 
 function route() {
-  const settings = location.hash === '#settings';
-  $('brain').hidden = settings;
-  $('settings').hidden = !settings;
-  for (const [id, on] of [['nav-city', !settings], ['nav-settings', settings]]) on ? $(id).setAttribute('aria-current', 'page') : $(id).removeAttribute('aria-current');
-  if (settings) { renderSettings(); loadAlerts(); }
+  const view = location.hash === '#settings' ? 'settings' : location.hash === '#health' ? 'health' : 'city';
+  $('brain').hidden = view !== 'city';
+  $('settings').hidden = view !== 'settings';
+  $('health').hidden = view !== 'health';
+  for (const [id, on] of [['nav-city', view === 'city'], ['nav-settings', view === 'settings'], ['nav-health', view === 'health']]) on ? $(id).setAttribute('aria-current', 'page') : $(id).removeAttribute('aria-current');
+  if (view === 'settings') { renderSettings(); loadAlerts(); }
+  if (view === 'health') loadHealth();
 }
+
+// ---------------- diagnostics ----------------
+let healthBusy = false;
+const healthTone = s => ({ ok: 'ok', setup: 'warn' }[s] || 'bad');
+const ago = iso => { if (!iso) return 'never'; const s = Math.round((Date.now() - Date.parse(iso)) / 1000); return s < 90 ? s + 's ago' : s < 5400 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago'; };
+async function loadHealth(fresh = false) {
+  if (healthBusy) return;
+  healthBusy = true;
+  $('health-fresh').disabled = true;
+  $('health-summary').textContent = fresh ? 'Reading every source fresh…' : 'Loading…';
+  try {
+    const response = await fetch('/api/diagnostics' + (fresh ? '?fresh=1' : ''), { headers: { 'x-a2z-key': key } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Diagnostics unavailable');
+    renderHealth(data);
+  } catch (error) {
+    $('health-summary').textContent = error.message;
+  } finally {
+    healthBusy = false;
+    $('health-fresh').disabled = false;
+  }
+}
+function renderHealth(d) {
+  const tally = { ok: 0, warn: 0, bad: 0 };
+  for (const c of d.checks) tally[healthTone(c.status)]++;
+  $('health-count').hidden = !tally.bad;
+  $('health-count').textContent = tally.bad;
+  $('health-summary').textContent = (d.fresh ? 'Fresh check' : 'Cached ' + (d.cache.ageSeconds ?? 0) + 's ago (refreshes every ' + d.cache.ttlSeconds + 's)')
+    + ' · ' + d.totalMs + ' ms · ' + (d.mode === 'sample' ? 'sample data' : 'live');
+  const overview = $('health-overview');
+  overview.replaceChildren();
+  for (const [tone, label] of [['ok', 'Healthy'], ['warn', 'Needs setup'], ['bad', 'Failing']]) {
+    const card = node('div', undefined, 'surface stat ' + tone);
+    card.append(node('strong', String(tally[tone])), node('span', label));
+    overview.append(card);
+  }
+  const box = $('health-checks');
+  box.replaceChildren();
+  for (const group of [...new Set(d.checks.map(c => c.group))]) {
+    const card = node('section', undefined, 'surface rule-group');
+    card.append(node('h2', group));
+    const list = node('div', undefined, 'checks');
+    for (const c of d.checks.filter(x => x.group === group).sort((a, b) => ['bad', 'warn', 'ok'].indexOf(healthTone(a.status)) - ['bad', 'warn', 'ok'].indexOf(healthTone(b.status)))) {
+      const row = node('div', undefined, 'check ' + healthTone(c.status));
+      const head = node('div', undefined, 'check-head');
+      head.append(node('span', c.label, 'check-name'), badge(c.status, c.status === 'ok' ? 'Healthy' : c.status === 'setup' ? 'Setup needed' : 'Failing'));
+      row.append(head);
+      if (c.detail) row.append(node('p', c.detail, 'check-detail'));
+      const meta = node('div', undefined, 'check-meta');
+      if (c.ms != null) meta.append(node('span', c.ms + ' ms', c.ms > 4000 ? 'slow' : ''));
+      meta.append(node('span', 'Checked ' + ago(c.checkedAt)));
+      for (const [k, v] of Object.entries(c.records || {})) if (v != null) meta.append(node('span', k.replace(/([A-Z])/g, ' $1').toLowerCase() + ': ' + (typeof v === 'number' ? number(v) : v)));
+      row.append(meta);
+      list.append(row);
+    }
+    card.append(list);
+    box.append(card);
+  }
+  const config = $('health-config');
+  config.replaceChildren();
+  for (const [name, vars] of Object.entries(d.config)) {
+    const item = node('div', undefined, 'config');
+    item.append(node('strong', name));
+    const chips = node('div', undefined, 'chips');
+    for (const [v, set] of Object.entries(vars)) chips.append(node('span', v, 'chip ' + (set ? 'set' : 'missing')));
+    item.append(chips);
+    config.append(item);
+  }
+  const r = d.runtime;
+  $('health-runtime').textContent = ['Node ' + r.node, r.context && 'context ' + r.context, r.commit && 'commit ' + r.commit, 'generated ' + new Date(d.generatedAt).toLocaleTimeString('en-US')].filter(Boolean).join(' · ');
+}
+$('health-fresh').addEventListener('click', () => loadHealth(true));
+// While Diagnostics is open, re-read the cached view every minute. A fresh read only happens on the button.
+setInterval(() => { if (!$('health').hidden && !document.hidden) loadHealth(); }, 60000);
 window.addEventListener('hashchange', route);
 refresh().then(route);

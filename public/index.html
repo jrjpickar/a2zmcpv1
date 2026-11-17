@@ -17,6 +17,7 @@
     <nav class="views" aria-label="Views">
       <a href="#city" id="nav-city" aria-current="page">City</a>
       <a href="#settings" id="nav-settings">Alerts <span id="alert-count" class="count" hidden></span></a>
+      <a href="#health" id="nav-health">Diagnostics <span id="health-count" class="count" hidden></span></a>
     </nav>
     <p id="status" class="pill" role="status">Connecting…</p>
     <form id="controls">
@@ -58,6 +59,16 @@
         <p id="alert-status" class="muted" role="status"></p>
       </form>
       <div id="rules"></div>
+    </section>
+    <section id="health" class="settings" aria-labelledby="health-title" hidden>
+      <div class="settings-head health-head">
+        <div><h1 id="health-title">Diagnostics</h1><p class="muted" id="health-summary">Status, response time and record counts for every connection. Secret values are never shown.</p></div>
+        <div class="actions"><button type="button" id="health-fresh" class="primary">Run fresh check</button></div>
+      </div>
+      <div id="health-overview" class="health-overview"></div>
+      <div id="health-checks"></div>
+      <section class="surface rule-group"><h2>Configuration</h2><div id="health-config" class="config-grid"></div></section>
+      <p id="health-runtime" class="muted"></p>
     </section>
   </main>
 </body>

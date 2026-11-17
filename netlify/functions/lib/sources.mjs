@@ -1,14 +1,19 @@
-import { MissingConfiguration, number, readJson, required } from './http.mjs';
+import { ExposedError, MissingConfiguration, number, readJson, required } from './http.mjs';
 
 export const siteKeys = { Estimating: 'ESTIMATING', Dispatch: 'DISPATCH', Ledger: 'LEDGER' };
 
+// Every source result carries how long it took and when, for the Diagnostics tab.
 export async function source(load) {
+  const started = Date.now();
+  const meta = () => ({ ms: Date.now() - started, checkedAt: new Date().toISOString() });
   try {
-    return { status: 'ok', data: await load() };
+    return { status: 'ok', data: await load(), ...meta() };
   } catch (error) {
-    if (error instanceof MissingConfiguration) return { status: 'setup', detail: error.message };
+    if (error instanceof MissingConfiguration) return { status: 'setup', detail: error.message, ...meta() };
+    if (error instanceof ExposedError) return { status: 'error', detail: error.message, ...meta() };
     const upstream = /^Upstream HTTP (\d+)$/.exec(error.message);
-    return { status: 'error', detail: upstream ? 'Upstream HTTP ' + upstream[1] : 'Upstream unavailable or invalid response' };
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+    return { status: 'error', detail: upstream ? 'Upstream HTTP ' + upstream[1] : timeout ? 'Timed out' : 'Upstream unavailable or invalid response', ...meta() };
   }
 }
 
@@ -93,18 +98,36 @@ export async function netlifyDeploy(env, key) {
   };
 }
 
+// Accepts "us2.make.com", "https://us2.make.com/" or ".../api/v2". Celonis zones are allowed too.
+export function makeZone(raw) {
+  const host = String(raw || '').trim().replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+  if (!/^(?:[a-z0-9-]+\.)?(?:eu|us)\d\.make\.(?:com|celonis\.com)$/.test(host)) throw new ExposedError('MAKE_ZONE must look like us2.make.com');
+  return host;
+}
+
 export async function makeUsage(env) {
-  const zone = required(env, 'MAKE_ZONE');
+  const zone = makeZone(required(env, 'MAKE_ZONE'));
   const org = required(env, 'MAKE_ORG_ID');
-  const token = required(env, 'MAKE_API_TOKEN');
-  if (!/^(us|eu)[12]\.make\.com$/.test(zone) || !/^\d+$/.test(org)) throw new Error('Invalid Make configuration');
-  const data = await readJson('https://' + zone + '/api/v2/organizations/' + org + '/usage?organizationTimezone=true', {
-    headers: { Authorization: 'Token ' + token },
-  });
-  if (!Array.isArray(data.data) || data.data.some(row => number(row.centicredits) === null || !/^\d{4}-\d\d-\d\d$/.test(row.date))) {
-    throw new Error('Invalid Make usage');
+  const token = required(env, 'MAKE_API_TOKEN').replace(/^Token\s+/i, '');
+  if (!/^\d+$/.test(org)) throw new ExposedError('MAKE_ORG_ID must be the numeric organization ID');
+  let data;
+  try {
+    data = await readJson('https://' + zone + '/api/v2/organizations/' + org + '/usage?organizationTimezone=true', {
+      headers: { Authorization: 'Token ' + token, Accept: 'application/json' },
+    });
+  } catch (error) {
+    const status = /HTTP (\d+)/.exec(error.message)?.[1];
+    const hint = { 401: 'token rejected. Check MAKE_API_TOKEN', 403: 'token needs the organizations:read scope', 404: 'organization not found in ' + zone + '. Check MAKE_ORG_ID and MAKE_ZONE' }[status];
+    throw hint ? new ExposedError('Make API ' + status + ': ' + hint) : error;
   }
-  return data.data.map(row => ({ date: row.date, credits: number(row.centicredits) / 100 }));
+  if (!Array.isArray(data?.data)) throw new ExposedError('Make usage response had no data array');
+  // centicredits can arrive as a string (bigint) or be missing on operations-based plans. Fall back to operations.
+  return data.data.flatMap(row => {
+    const date = String(row?.date || '').slice(0, 10);
+    const centi = number(row?.centicredits), ops = number(row?.operations);
+    if (!/^\d{4}-\d\d-\d\d$/.test(date) || (centi === null && ops === null)) return [];
+    return [{ date, credits: centi !== null ? centi / 100 : ops }];
+  });
 }
 
 export async function cashBalance(env) {

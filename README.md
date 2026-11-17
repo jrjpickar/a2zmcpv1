@@ -63,9 +63,13 @@ The handler keeps events after an opportunity advances and deduplicates retries.
 
 Click A2Z HQ in the city. It shows rule-based signals (Act, Watch, Good) at once, then a 3 bullet Groq overview. The prompt below it answers questions from the same numbers. `POST /api/ask` uses `GROQ_API_KEY` and `openai/gpt-oss-120b` (override with `GROQ_MODEL`, cap with `GROQ_MAX_TOKENS`, default 900 including reasoning). Groq only runs when someone opens HQ or asks. The same question on the same data reuses the answer for 10 minutes. Only aggregates are sent: no crew names or contact data.
 
+## Diagnostics
+
+The Diagnostics tab (`GET /api/diagnostics`, dashboard key) lists every data source, deploy and service with status, the exact error, response time, last check and record counts, plus which variables are set (never their values). It reads the shared 90 second cache. Run fresh check re-reads everything once and verifies the Groq key with Groq's free models endpoint. The alert scheduler records each run so a stalled schedule shows as failing.
+
 ## Pipeline sales
 
-Multiple GCs Bidding is excluded from sales by name and by `GHL_MULTI_GC_PIPELINE_ID` when set. Add more IDs with `SALES_EXCLUDE_PIPELINE_IDS` (comma separated). Proposal counts still include Multiple GCs bids.
+Multiple GCs Bidding, Hiring and New Customer are excluded from sales by name and by `GHL_MULTI_GC_PIPELINE_ID` when set. Add more pipeline IDs or exact names with `SALES_EXCLUDE_PIPELINE_IDS` (comma separated). Proposal counts still include Multiple GCs bids.
 
 ## System health PC
 
@@ -91,7 +95,7 @@ Booked crew comes from today's active Dispatch jobs. Available crew needs a `wor
 
 1. Open the dashboard and enter its access key. A GHL Custom Page can use the dashboard origin and prompt for the key.
 2. Confirm System Health shows Estimating, Dispatch and Ledger data sources and deploys. Check Twilio and Make against billing.
-3. Compare a known labor booking, container sale, and assigned worker with their sources. Labor sales count confirmed Dispatch bookings. Container sales count Won GHL opportunities. Both are booked amounts.
+3. Compare a known labor job, container sale, and assigned worker with their sources. All sales values come from GHL opportunities marked Won, once per opportunity, dated by status change. Labor sales is the Labor pipeline (by name, or set `LABOR_PIPELINE_ID`). Pipeline sales is every other sales pipeline. Dispatch is used for crew only.
 4. Test one proposal and one award transition. Verify the counts persist after the records advance.
 5. Connect MCP using `https://YOUR-A2Z-DASHBOARD/mcp` with `Authorization: Bearer <MCP_KEY>`. Discover the read-only `a2z_operating_report` tool.
 6. Validate locally with `npm test`. The dashboard and MCP share a short per-instance cache and the same Pacific-date metric definitions.

@@ -5,7 +5,7 @@ import { report as buildReport } from './report.mjs';
 
 export const DEFAULT_WEBHOOK = 'https://hook.us2.make.com/bjl5ooam64m8csp4glmr3bxbykc9cpi5';
 export const PRESETS = ['today', 'wtd', 'mtd', '30d', 'ytd'];
-const SETTINGS_KEY = 'alerts/settings', STATE_KEY = 'alerts/state';
+const SETTINGS_KEY = 'alerts/settings', STATE_KEY = 'alerts/state', RUN_KEY = 'alerts/lastRun';
 const usd = v => v == null ? 'n/a' : '$' + Math.round(v).toLocaleString('en-US');
 const count = v => v == null ? 'n/a' : Math.round(v * 10) / 10 + '';
 
@@ -17,7 +17,7 @@ export function catalog(report) {
     { key: 'proposals', group: 'Sales', label: 'Proposals sent', district: 'proposals', period: true, value: k.funnel?.proposals, format: count },
     { key: 'wins', group: 'Sales', label: 'Jobs won', district: 'wins', period: true, value: k.funnel?.wins, format: count },
     { key: 'labor', group: 'Sales', label: 'Labor sales', district: 'labor', period: true, value: k.labor?.amount, format: usd },
-    { key: 'labor-count', group: 'Sales', label: 'Labor bookings', district: 'labor', period: true, value: k.labor?.count, format: count },
+    { key: 'labor-count', group: 'Sales', label: 'Labor jobs won', district: 'labor', period: true, value: k.labor?.count, format: count },
     { key: 'pipeline-total', group: 'Sales', label: 'Pipeline sales, all pipelines', district: 'pipelines', period: true,
       value: k.pipelines ? k.pipelines.reduce((t, p) => t + p.amount, 0) : null, format: usd },
     ...(k.pipelines || []).filter(p => p.id !== 'unassigned').map(p => ({ key: 'pipeline:' + p.id, group: 'Sales', label: 'Pipeline sales, ' + p.name,
@@ -132,8 +132,17 @@ export async function post(url, body, fetchImpl = fetch) {
   if (!response.ok) throw new Error('Webhook HTTP ' + response.status);
 }
 
-// Scheduled and manual check. Sends each triggered rule once per cooldown. Never throws.
-export async function runCheck({ env = process.env, now = new Date(), store = alertStore(), fetchImpl = fetch, reportImpl, force = false } = {}) {
+// Scheduled and manual check. Sends each triggered rule once per cooldown. Never throws. The outcome is kept for Diagnostics.
+export async function runCheck(options = {}) {
+  const { now = new Date(), store = alertStore() } = options;
+  const result = await check(options);
+  await store.setJSON(RUN_KEY, { at: now.toISOString(), manual: Boolean(options.force), result }).catch(() => {});
+  return result;
+}
+export async function lastRun(store = alertStore()) {
+  return store.get(RUN_KEY, { type: 'json' }).catch(() => null);
+}
+async function check({ env = process.env, now = new Date(), store = alertStore(), fetchImpl = fetch, reportImpl, force = false } = {}) {
   try {
     const settings = await loadSettings(store);
     if (!settings.enabled) return { skipped: 'Alerts are turned off' };

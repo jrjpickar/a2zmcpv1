@@ -1,6 +1,6 @@
 import { number } from './http.mjs';
 import { cashBalance, containerPipelineId, exportFeed, wonSales, makeUsage, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
-import { containerSales as summarizeContainers, day, funnel, laborSales, pipelineSales, signals, makeCreditBalance, rangeFor, runway, workforce } from './metrics.mjs';
+import { containerSales as summarizeContainers, day, funnel, pipelineSales, signals, makeCreditBalance, rangeFor, runway, workforce } from './metrics.mjs';
 
 const cache = new WeakMap();
 const ttl = 90_000;
@@ -55,7 +55,7 @@ function sample(today) {
 async function readSources(env, today) {
   if (env.DATA_MODE === 'sample') {
     const { builds, ...data } = sample(today);
-    const ok = data => ({ status: 'ok', data });
+    const ok = data => ({ status: 'ok', data, ms: 0, checkedAt: new Date().toISOString() });
     return { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, ok(v)])), builds: Object.fromEntries(Object.entries(builds).map(([k, v]) => [k, ok(v)])) };
   }
 
@@ -113,16 +113,27 @@ export async function report(input = {}, env = process.env, now = new Date()) {
   const netlifyBalance = number(config.NETLIFY_CREDITS_REMAINING);
   const netlifyDate = day(config.NETLIFY_CREDITS_AS_OF);
   const status = ({ status, detail }) => ({ status, detail });
+  // All sales values come from GoHighLevel won opportunities. The Labor pipeline is Labor sales; the rest are pipeline sales.
+  const sales = { pipelines: null, labor: null };
+  if (ghl.data) {
+    const all = pipelineSales(ghl.data, range, containerPipelineId(config),
+      [config.GHL_MULTI_GC_PIPELINE_ID, ...(config.SALES_EXCLUDE_PIPELINE_IDS || '').split(',')].map(x => x?.trim()).filter(x => x && x !== 'off'));
+    const laborId = config.LABOR_PIPELINE_ID?.trim();
+    const isLabor = p => laborId ? p.id === laborId : /\blabou?r\b/i.test(p.name);
+    const labor = all.find(isLabor);
+    sales.pipelines = all.filter(p => p !== labor);
+    sales.labor = labor ? { pipelineId: labor.id, name: labor.name, count: labor.count, amount: labor.amount, missingValue: labor.missingValue,
+      missingDate: labor.missingDate, jobs: labor.jobs, jobsMore: labor.jobsMore } : null;
+  }
   const result = {
     mode: demonstration ? 'sample' : 'live',
     range,
     generatedAt: now.toISOString(),
     kpis: {
       funnel: estimating.data ? funnel(estimating.data, range) : null,
-      labor: dispatch.data ? laborSales(dispatch.data, range) : null,
+      labor: sales.labor,
       containers: ghl.data ? summarizeContainers(ghl.data.opportunities.filter(r => r.pipelineId === containerPipelineId(config)), range) : null,
-      pipelines: ghl.data ? pipelineSales(ghl.data, range, containerPipelineId(config),
-        [config.GHL_MULTI_GC_PIPELINE_ID, ...(config.SALES_EXCLUDE_PIPELINE_IDS || '').split(',')].map(x => x?.trim()).filter(x => x && x !== 'off')) : null,
+      pipelines: sales.pipelines,
       workforce: dispatch.data ? workforce(dispatch.data, today) : null,
       runway: runway(ledger.data, cash.data, config, today),
     },
@@ -144,13 +155,79 @@ export async function report(input = {}, env = process.env, now = new Date()) {
       leads: 'New opportunities in the primary Estimating pipeline, by creation date.',
       proposals: 'One per bid opportunity. Uses saved proposal events and current Proposal Sent timestamps, including additional GC bids.',
       wins: 'One per awarded job opportunity. Uses saved award events and current primary-pipeline win or award timestamps.',
-      labor: 'Confirmed hourly labor bookings made through Dispatch. Booked value, before collections.',
+      labor: 'GoHighLevel Labor pipeline opportunities currently marked Won, dated by status change. Won value, before collections.',
       containers: 'GoHighLevel Container pipeline opportunities currently marked Won. Won value, before collections.',
-      pipelines: 'GoHighLevel opportunities currently marked Won, grouped by pipeline and dated by status change. Multiple GCs Bidding is excluded. Won value, before collections. The Labor sales tile uses Dispatch bookings instead.',
+      pipelines: 'GoHighLevel opportunities currently marked Won, grouped by pipeline and dated by status change. Multiple GCs Bidding, Hiring and New Customer are excluded. Won value, before collections. The Labor pipeline is shown as Labor sales instead.',
       workforce: 'Booked: unique workers assigned to active Dispatch jobs today, excluding workers sent home. Available: active Dispatch roster members with no job today.',
       runway: 'Cash on hand divided by monthly cash burn. The Ledger estimate covers recorded bill payments only.',
     },
   };
   result.signals = signals(result.kpis, result.system);
   return result;
+}
+
+// ---------------- diagnostics ----------------
+const has = (env, ...keys) => Object.fromEntries(keys.map(k => [k, Boolean(env[k]?.trim?.())]));
+const count = v => Array.isArray(v) ? v.length : null;
+const labels = { estimating: 'Estimating Desk export', dispatch: 'Dispatch export', ledger: 'Ledger export', cash: 'Bank cash balance',
+  ghl: 'GoHighLevel opportunities', twilio: 'Twilio balance API', make: 'Make usage API' };
+
+function records(name, data) {
+  if (!data) return null;
+  if (name === 'estimating') return { opportunities: count(data.opportunities), pipelines: count(data.pipelines), events: count(data.history?.events) };
+  if (name === 'dispatch') {
+    const roster = ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].find(k => Array.isArray(data[k]));
+    return { jobs: count(data.jobs), bookings: count(data.bookings), roster: roster ? data[roster].length : 'missing', crewOnJobs: (data.jobs || []).reduce((t, j) => t + (j.crew || j.workers || []).length, 0) };
+  }
+  if (name === 'ledger') return { bills: count(data.bills), bankStatus: data.cashBalance?.status || 'not sent' };
+  if (name === 'ghl') return { wonOpportunities: count(data.opportunities), pipelines: count(data.pipelines) };
+  if (name === 'make') return { days: count(data), credits30d: Math.round(data.reduce((t, r) => t + r.credits, 0)) };
+  if (name === 'twilio') return { balance: data.balance, currency: data.currency };
+  if (name === 'cash') return { balance: data.balance, asOf: data.asOf };
+  return null;
+}
+
+// What the Diagnostics tab shows. fresh=true skips the 90 second cache for one full re-read.
+export async function diagnostics({ env = process.env, now = new Date(), fresh = false, fetchImpl = fetch } = {}) {
+  const today = day(now);
+  if (fresh) cache.delete(env);
+  const started = Date.now();
+  const sources = await cachedSources(env, today);
+  const cached = cache.get(env);
+  const { builds, ...feeds } = sources;
+  const checks = Object.entries(feeds).map(([name, r]) => ({ id: 'source:' + name, group: 'Data sources', label: labels[name] || name,
+    status: r.status, detail: r.detail || null, ms: r.ms ?? null, checkedAt: r.checkedAt || null, records: records(name, r.data) }));
+  for (const [name, r] of Object.entries(builds)) checks.push({ id: 'deploy:' + name, group: 'Deploys', label: name + ' production deploy',
+    status: r.status === 'ok' ? (r.data.state === 'ready' ? 'ok' : 'error') : r.status, detail: r.detail || (r.data && ['state ' + r.data.state,
+      r.data.latestState && r.data.latestState !== r.data.state && 'latest build ' + r.data.latestState].filter(Boolean).join(', ')) || null,
+    ms: r.ms ?? null, checkedAt: r.checkedAt || null, records: r.data ? { publishedAt: r.data.publishedAt } : null });
+  // Groq: checks the key and model with the free models endpoint, only on a fresh run.
+  const model = env.GROQ_MODEL || 'openai/gpt-oss-120b';
+  let groq = { status: env.GROQ_API_KEY ? 'ok' : 'setup', detail: env.GROQ_API_KEY ? 'Key set. Run a fresh check to verify it' : 'GROQ_API_KEY is not set for functions' };
+  if (env.GROQ_API_KEY && fresh && env.DATA_MODE !== 'sample') {
+    const t0 = Date.now();
+    try {
+      const res = await fetchImpl('https://api.groq.com/openai/v1/models/' + encodeURIComponent(model), { headers: { Authorization: 'Bearer ' + env.GROQ_API_KEY }, signal: AbortSignal.timeout(8000) });
+      groq = res.ok ? { status: 'ok', detail: 'Key valid, model available' } : { status: 'error', detail: res.status === 401 ? 'Groq rejected the key' : res.status === 404 ? 'Model ' + model + ' not available' : 'Groq HTTP ' + res.status };
+    } catch { groq = { status: 'error', detail: 'Groq unreachable' }; }
+    groq.ms = Date.now() - t0;
+  }
+  checks.push({ id: 'groq', group: 'Services', label: 'Groq (' + model + ')', ...groq, checkedAt: now.toISOString() });
+  const config = {
+    Dashboard: has(env, 'DASHBOARD_KEY', 'MCP_KEY'),
+    'Estimating Desk': has(env, 'ESTIMATING_URL', 'ESTIMATING_EXPORT_KEY'),
+    Dispatch: has(env, 'DISPATCH_URL', 'DISPATCH_EXPORT_KEY'),
+    Ledger: has(env, 'LEDGER_URL', 'LEDGER_EXPORT_KEY'),
+    GoHighLevel: has(env, 'GHL_PIT_TOKEN', 'GHL_LOCATION_ID', 'CONTAINER_PIPELINE_ID'),
+    Twilio: has(env, 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'),
+    Make: has(env, 'MAKE_ZONE', 'MAKE_ORG_ID', 'MAKE_API_TOKEN', 'MAKE_CYCLE_CREDITS', 'MAKE_CYCLE_START'),
+    Netlify: has(env, 'NETLIFY_ACCESS_TOKEN', 'ESTIMATING_NETLIFY_SITE_ID', 'DISPATCH_NETLIFY_SITE_ID', 'LEDGER_NETLIFY_SITE_ID', 'NETLIFY_CREDITS_REMAINING', 'NETLIFY_CREDITS_AS_OF'),
+    Groq: has(env, 'GROQ_API_KEY', 'GROQ_MODEL'),
+  };
+  return {
+    mode: env.DATA_MODE === 'sample' ? 'sample' : 'live', generatedAt: now.toISOString(), fresh, totalMs: Date.now() - started,
+    cache: { ageSeconds: cached?.finishedAt ? Math.round((Date.now() - cached.finishedAt) / 1000) : null, ttlSeconds: ttl / 1000 },
+    runtime: { node: process.version, context: env.CONTEXT || null, commit: env.COMMIT_REF ? env.COMMIT_REF.slice(0, 7) : null, deployId: env.DEPLOY_ID || null },
+    checks, config,
+  };
 }

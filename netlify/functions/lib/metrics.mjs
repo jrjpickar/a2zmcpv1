@@ -81,16 +81,16 @@ function sales(rows, field) {
   };
 }
 
-export const laborSales = (data, range) => sales(unique(data.bookings.filter(r =>
-  r.kind === 'job' && (!r.jobType || r.jobType === 'hourly')), 'opportunityId').filter(r => within(r.at, range)), 'monetaryValue');
 
 export const containerSales = (rows, range) => ({
   ...sales(rows.filter(r => r.status?.toLowerCase() === 'won' && within(r.at, range)), 'value'),
   missingDate: rows.filter(r => r.status?.toLowerCase() === 'won' && !day(r.at)).length,
 });
 
-// Bid-only pipelines are left out of sales: Multiple GCs Bidding by name, plus any IDs in `exclude`.
-export const excludedPipeline = (p, exclude = []) => exclude.includes(p.id) || /multiple\s+gcs?\b/i.test(p.name || '');
+// Non-sales pipelines are left out: Multiple GCs Bidding, Hiring and New Customer by name, plus any IDs or names in `exclude`.
+const NON_SALES = /multiple\s+gcs?\b|hiring|new\s+customers?/i;
+export const excludedPipeline = (p, exclude = []) => exclude.includes(p.id) || NON_SALES.test(p.name || '')
+  || exclude.some(x => x.toLowerCase() === String(p.name || '').trim().toLowerCase());
 
 export function pipelineSales(data, range, containerId, exclude = []) {
   const skip = new Set((data.pipelines || []).filter(p => excludedPipeline(p, exclude)).map(p => p.id).concat(exclude));
@@ -115,33 +115,41 @@ export function pipelineSales(data, range, containerId, exclude = []) {
   }).sort((a, b) => b.amount - a.amount || b.count - a.count || a.name.localeCompare(b.name));
 }
 
+const fullName = p => String(p?.name || p?.fullName || p?.contactName || [p?.firstName, p?.lastName].filter(Boolean).join(' ') || '').trim();
+const jobLabel = j => String(j.jobName || j.name || j.title || j.customerName || j.customer?.name || j.siteName || j.address || '').trim();
+// Dispatch rosters may arrive under different keys. The first array found is used.
+const rosterOf = data => ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].map(k => data[k]).find(Array.isArray) || null;
+
 export function workforce(data, today) {
   const jobIds = new Set();
   const people = new Map();
-  const identity = person => person?.id || person?.contactId || (person?.phone || '').replace(/\D/g, '').slice(-10)
-    || person?.name?.trim().toLowerCase();
+  const identity = person => person?.id || person?.contactId || person?.workerId || (person?.phone || '').replace(/\D/g, '').slice(-10)
+    || fullName(person).toLowerCase();
   for (const job of data.jobs) {
-    if (!job.active || !job.reportDate || job.reportDate > today || (job.reportEndDate || job.reportDate) < today) continue;
-    const sentHome = new Set((job.sentHome || []).filter(p => !p.reportDate || p.reportDate === today).map(identity).filter(Boolean));
-    for (const worker of job.crew || []) {
+    // Report dates may be plain dates or full timestamps. Compare them as Pacific dates.
+    const start = day(job.reportDate), end = day(job.reportEndDate) || start;
+    if (job.active === false || String(job.status || '').toLowerCase().match(/^(cancel|complete|closed)/) || !start || start > today || end < today) continue;
+    const sentHome = new Set((job.sentHome || []).filter(p => !p.reportDate || day(p.reportDate) === today).map(identity).filter(Boolean));
+    for (const worker of job.crew || job.workers || []) {
       const id = identity(worker);
       if (!id || sentHome.has(id) || worker.sentHome === true) continue;
       if (!people.has(id)) people.set(id, {
         key: workerKey(id),
-        name: String(worker.name || '').trim() || 'Crew member ' + (people.size + 1),
+        name: fullName(worker) || 'Crew member ' + (people.size + 1),
         role: String(worker.role || worker.title || '').trim() || null,
-        job: String(job.jobName || job.name || job.title || job.customerName || '').trim() || 'Job ' + job.jobId,
+        job: jobLabel(job) || 'Job ' + job.jobId,
       });
       jobIds.add(job.jobId);
     }
   }
-  // Available: Dispatch roster members who are active and not booked on a job today.
-  const roster = Array.isArray(data.workers) ? data.workers : null;
+// Available: Dispatch roster members who are active and not booked on a job today.
+  const roster = rosterOf(data);
   const bench = new Map();
   for (const person of roster || []) {
     const id = identity(person);
-    if (!id || people.has(id) || bench.has(id) || person.active === false || person.available === false) continue;
-    bench.set(id, { key: workerKey(id), name: String(person.name || '').trim() || 'Crew member ' + (people.size + bench.size + 1), role: String(person.role || person.title || '').trim() || null });
+    if (!id || people.has(id) || bench.has(id) || person.active === false || person.available === false
+      || /^(inactive|terminated|archived)/i.test(String(person.status || ''))) continue;
+    bench.set(id, { key: workerKey(id), name: fullName(person) || 'Crew member ' + (people.size + bench.size + 1), role: String(person.role || person.title || '').trim() || null });
   }
   return { workers: people.size, booked: people.size, available: roster ? bench.size : null, jobs: jobIds.size, asOf: today,
     crew: [...people.values()], bench: [...bench.values()] };
@@ -204,7 +212,7 @@ export function signals(k, s) {
     add(total ? 'good' : 'watch', 'pipelines', usd(total) + ' won' + (top?.amount ? ', led by ' + top.name + ' ' + Math.round(top.amount / total * 100) + '%' : ''));
     if (missing) add('watch', 'pipelines', missing + ' won deal' + (missing === 1 ? '' : 's') + ' missing a dollar value');
   }
-  if (k.labor) add(k.labor.count ? 'good' : 'watch', 'labor', usd(k.labor.amount) + ' labor booked across ' + k.labor.count + ' booking' + (k.labor.count === 1 ? '' : 's'));
+  if (k.labor) add(k.labor.count ? 'good' : 'watch', 'labor', usd(k.labor.amount) + ' labor won across ' + k.labor.count + ' job' + (k.labor.count === 1 ? '' : 's'));
   const w = k.workforce;
   if (w) {
     const pool = w.available == null ? null : w.booked + w.available;

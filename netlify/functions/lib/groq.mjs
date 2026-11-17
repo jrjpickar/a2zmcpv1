@@ -6,7 +6,7 @@ export function compact(r, alerts = []) {
   const { crew, bench, ...workforce } = r.kpis.workforce || {};
   return {
     range: r.range, mode: r.mode,
-    funnel: r.kpis.funnel, labor: r.kpis.labor, containers: r.kpis.containers,
+    funnel: r.kpis.funnel, labor: r.kpis.labor && { count: r.kpis.labor.count, amount: r.kpis.labor.amount }, containers: r.kpis.containers,
     pipelines: (r.kpis.pipelines || []).map(p => [p.name, p.count, p.amount, p.jobs?.[0]?.value ?? null]), pipelineColumns: ['name', 'wins', 'wonValue', 'largestWin'],
     workforce: r.kpis.workforce ? workforce : null,
     runway: { months: r.kpis.runway.months, cash: r.kpis.runway.cash, monthlyBurn: r.kpis.runway.monthlyBurn, basis: r.kpis.runway.basis },

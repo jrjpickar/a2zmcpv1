@@ -67,11 +67,12 @@ test('sample is explicit, while absent live sources stay unavailable', async () 
   assert.equal(demo.kpis.workforce.available, 8);
   assert.equal(demo.system.twilio.balance, 48.72);
   assert.equal(demo.kpis.containers.amount, 7250);
-  assert.equal(demo.kpis.pipelines.length, 3);
+  assert.equal(demo.kpis.pipelines.length, 2);
+  assert.deepEqual([demo.kpis.labor.amount, demo.kpis.labor.count, demo.kpis.labor.missingValue], [9200, 2, 1]);
   assert.ok(!demo.kpis.pipelines.some(p => /multiple/i.test(p.name)));
   const demoJobs = demo.kpis.pipelines.find(p => p.name === 'Demolition Bids').jobs;
   assert.deepEqual(demoJobs.map(j => j.value), [48500, 21750, 12400, 6800]);
-  assert.equal(demo.kpis.pipelines.find(p => p.name === 'Labor').jobs.at(-1).value, null);
+  assert.equal(demo.kpis.labor.jobs.at(-1).value, null);
   const live = await report({}, {}, now);
   assert.equal(live.mode, 'live');
   assert.equal(live.kpis.labor, null);
@@ -106,13 +107,15 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
     }
     if (url.hostname === 'services.leadconnectorhq.com') {
       assert.equal(options.headers.Authorization, 'Bearer ' + env.GHL_PIT_TOKEN);
-      if (url.pathname === '/opportunities/pipelines') return Response.json({ pipelines: [{ id: 'F8i8hB7E5xHrJbJUXFr4', name: 'Containers' }, { id: 'main', name: 'Demolition' }] });
+      if (url.pathname === '/opportunities/pipelines') return Response.json({ pipelines: [{ id: 'F8i8hB7E5xHrJbJUXFr4', name: 'Containers' }, { id: 'main', name: 'Demolition' }, { id: 'lab', name: 'Labor' }] });
       assert.equal(url.searchParams.has('pipeline_id'), false);
       return Response.json({ opportunities: [
         { id: '1', pipelineId: 'F8i8hB7E5xHrJbJUXFr4', status: 'won', lastStatusChangeAt: today, monetaryValue: 400 },
         { id: '2', pipelineId: 'main', status: 'won', lastStatusChangeAt: today, monetaryValue: 1500 },
         { id: '3', pipelineId: 'main', status: 'won', lastStatusChangeAt: '2026-10-02', monetaryValue: 900 },
-      ], meta: { total: 3 } });
+        { id: '4', pipelineId: 'lab', status: 'won', lastStatusChangeAt: today, monetaryValue: 700 },
+        { id: '4', pipelineId: 'lab', status: 'won', lastStatusChangeAt: today, monetaryValue: 700 },
+      ], meta: { total: 4 } });
     }
     if (url.hostname === 'api.twilio.com') return Response.json({}, { status: 403 });
     if (url.hostname === 'api.netlify.com') {
@@ -124,7 +127,10 @@ test('live pulls are authenticated, cached, and isolate Twilio failure from the 
   const response = await report({}, env, now);
   assert.equal(response.kpis.runway.months, 3);
   assert.equal(response.kpis.runway.asOf, '2026-11-15T18:00:00.000Z');
-  assert.equal(response.kpis.labor.amount, 250);
+  // Labor comes from the GHL Labor pipeline only, once per opportunity, never from Dispatch bookings.
+  assert.equal(response.kpis.labor.amount, 700);
+  assert.equal(response.kpis.labor.count, 1);
+  assert.ok(!response.kpis.pipelines.some(p => p.name === 'Labor'));
   assert.equal(response.kpis.containers.amount, 400);
   assert.deepEqual(response.kpis.pipelines.map(p => [p.name, p.count, p.amount]), [['Demolition', 1, 1500], ['Containers', 1, 400]]);
   assert.deepEqual(response.kpis.pipelines[0].jobs, [{ id: '2', name: 'Untitled opportunity', value: 1500, at: today }]);

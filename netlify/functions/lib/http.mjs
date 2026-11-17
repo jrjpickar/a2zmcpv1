@@ -13,6 +13,8 @@ export const json = (value, status = 200, headers = {}) => new Response(JSON.str
 });
 
 export class MissingConfiguration extends Error {}
+// An error whose message is safe to show on the dashboard (no secrets, no upstream bodies).
+export class ExposedError extends Error {}
 export function required(env, key) {
   if (!env[key]?.trim()) throw new MissingConfiguration(key + ' is required');
   return env[key].trim();

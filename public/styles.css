@@ -54,6 +54,25 @@ body { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
 .won-list li strong { font-variant-numeric: tabular-nums; text-align: right; }
 .won-list li small { grid-column: 1 / -1; color: var(--dim); font-size: .7rem; }
 .won > p { padding: 0 12px 10px; font-size: .75rem; }
+.health-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.health-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat { display: grid; gap: 2px; padding: 14px 16px; }
+.stat strong { font-size: 2rem; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--dim); font-size: .8rem; }
+.stat.ok strong { color: #7fd6a2; } .stat.warn strong { color: #f0c27f; } .stat.bad strong { color: #f08a80; }
+.checks { display: grid; gap: 8px; }
+.check { padding: 10px 12px; border-radius: 12px; background: #ffffff06; box-shadow: inset 3px 0 #2ee67a; }
+.check.warn { box-shadow: inset 3px 0 #ffb020; } .check.bad { box-shadow: inset 3px 0 #ff4d5e; background: #ff4d5e10; }
+.check-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.check-name { font-weight: 650; }
+.check-detail { margin-top: 4px; color: #d8dccf; font-size: .82rem; }
+.check-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; color: var(--dim); font-size: .74rem; font-variant-numeric: tabular-nums; }
+.check-meta .slow { color: #f0c27f; }
+.config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 4px 0 10px; }
+.config strong { display: block; margin-bottom: 6px; font-size: .85rem; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip { padding: 2px 8px; border-radius: 99px; font-size: .68rem; font-family: ui-monospace, monospace; }
+.chip.set { color: #7fd6a2; background: #6fcf971a; } .chip.missing { color: #f08a80; background: #e5766b1a; }
 .signals { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
 .signal { display: grid; grid-template-columns: 56px 1fr; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 10px; background: #ffffff08; font-size: .84rem; cursor: pointer; }
 .signal:hover { background: #ffffff12; }
@@ -193,6 +212,7 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
   .identity { display: none; }
   .brain .detail { top: auto; max-height: 58%; left: 10px; right: 10px; bottom: 10px; width: auto; }
   .webhook { grid-template-columns: 1fr; }
+  .views a { padding: 7px 9px; font-size: .82rem; }
   .rule { grid-template-columns: 30px minmax(0, 1fr) auto; }
   .rule.head { display: none; }
   .rule > :nth-child(n+4) { grid-column: 2 / -1; }

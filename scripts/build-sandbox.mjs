@@ -2,7 +2,7 @@
 // Run npm run build:city first so public/city3d.js is current.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { report } from '../netlify/functions/lib/report.mjs';
+import { diagnostics, report } from '../netlify/functions/lib/report.mjs';
 import { catalog, defaults } from '../netlify/functions/lib/alerts.mjs';
 
 const out = process.argv[2] || 'dist/sandbox.html';
@@ -12,10 +12,14 @@ const reports = {};
 for (const preset of ['today', 'wtd', 'mtd', '30d', 'ytd']) reports[preset] = await report({ preset }, { DATA_MODE: 'sample' });
 const metrics = catalog(reports.mtd).map(({ format, ...m }) => ({ ...m, valueText: m.kind === 'status' ? m.value : format(m.value) }));
 const alerts = { settings: defaults(), alerts: [], metrics, canEdit: true };
+const health = await diagnostics({ env: { DATA_MODE: 'sample', GROQ_API_KEY: 'x', DASHBOARD_KEY: 'x' } });
+health.checks.push({ id: 'blobs', group: 'Services', label: 'Netlify Blobs (alert settings)', status: 'ok', detail: 'Settings store reachable', ms: 41, checkedAt: health.generatedAt },
+  { id: 'alerts', group: 'Services', label: 'Alert scheduler (every 15 min)', status: 'setup', detail: 'No alert rules enabled', ms: null, checkedAt: null, records: { rulesEnabled: 0, webhook: 'hook.us2.make.com', cooldownMinutes: 240 } });
 const [html, css, city, map, app] = await Promise.all(['index.html', 'styles.css', 'city3d.js', 'map.js', 'app.js'].map(read));
 const stub = `const SAMPLE = ${JSON.stringify(reports)};
 try { sessionStorage.getItem('x'); } catch { Object.defineProperty(window, 'sessionStorage', { value: { getItem() { return ''; }, setItem() {}, removeItem() {} } }); }
 const ALERTS = ${JSON.stringify(alerts)};
+const HEALTH = ${JSON.stringify(health)};
 const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 function evaluateRules() {
   ALERTS.alerts = Object.entries(ALERTS.settings.rules).filter(([, r]) => r.enabled).flatMap(([id, r]) => {
@@ -41,6 +45,7 @@ setInterval(() => {
 window.fetch = async (url, init = {}) => {
   await new Promise(r => setTimeout(r, 250));
   const u = new URL(url, location.href);
+  if (u.pathname === '/api/diagnostics') return reply({ ...HEALTH, generatedAt: new Date().toISOString(), fresh: u.searchParams.get('fresh') === '1' });
   if (u.pathname === '/api/ask') return reply({ error: 'Sandbox preview: Groq runs on the deployed site with GROQ_API_KEY. The signals above are live from the sample data.' }, 503);
   if (u.pathname === '/api/alerts') {
     const method = init.method || 'GET';
