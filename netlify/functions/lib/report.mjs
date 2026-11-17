@@ -159,7 +159,7 @@ export async function report(input = {}, env = process.env, now = new Date()) {
       labor: 'GoHighLevel Labor pipeline opportunities currently marked Won, dated by status change. Won value, before collections.',
       containers: 'GoHighLevel Container pipeline opportunities currently marked Won. Won value, before collections.',
       pipelines: 'GoHighLevel opportunities currently marked Won, grouped by pipeline and dated by status change. Multiple GCs Bidding, Hiring and New Customer are excluded. Won value, before collections. The Labor pipeline is shown as Labor sales instead.',
-      workforce: 'Booked: unique workers assigned to active Dispatch jobs today, excluding workers sent home. Available: active Dispatch roster members with no job today.',
+      workforce: 'Read the same way as the Dispatch board. Booked: workers on open jobs that hold today, including multi-day jobs started earlier and undated open jobs, minus anyone sent home. Available: the board labor roster (plus manual workers, minus hidden) not booked today.',
       runway: 'Cash on hand divided by monthly cash burn. The Ledger estimate covers recorded bill payments only.',
     },
   };
@@ -179,8 +179,9 @@ function records(name, data, today) {
   if (name === 'dispatch') {
     const roster = ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].find(k => Array.isArray(data[k]));
     const t = workforceTrace(data, today);
-    return { jobsOnBoard: t.jobs, jobsToday: t.today, crewToday: t.crewEntries, skippedInactive: t.inactive, skippedNoDate: t.noDate, skippedOtherDay: t.otherDay,
-      skippedNoCrew: t.noCrew, datesSeen: t.datesSeen, roster: roster ? data[roster].length : 'missing', exportKeys: t.exportKeys, jobFields: t.jobFields, crewFields: t.crewFields };
+    return { jobsOnBoard: t.jobs, jobsHoldingCrewToday: t.today, crewToday: t.crewEntries, carriedOverFromEarlierDay: t.carriedOver, undatedOpen: t.noDate,
+      skippedClosed: t.inactive, skippedOtherDay: t.otherDay, skippedStale: t.stale, skippedNoCrew: t.noCrew, datesSeen: t.datesSeen,
+      laborRoster: Array.isArray(data.rosters?.labor?.data) || data.rosters?.labor?.data ? 'cached' : 'not cached yet', roster: roster ? data[roster].length : 'missing', exportKeys: t.exportKeys, jobFields: t.jobFields, crewFields: t.crewFields };
   }
   if (name === 'ledger') return { bills: count(data.bills), bankStatus: data.cashBalance?.status || 'not sent' };
   if (name === 'ghl') return { wonOpportunities: count(data.opportunities), pipelines: count(data.pipelines) };

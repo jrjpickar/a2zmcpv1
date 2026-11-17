@@ -250,7 +250,7 @@ function details(tile) {
     }
     panel.append(rows([
       ['Booked crew', number(wf?.booked ?? wf?.workers), wf ? plural(wf.jobs, 'active job') + ' today' : null],
-      ['Available crew', number(wf?.available), wf?.available == null ? 'Dispatch roster not in the export yet' : 'Active roster, no job today'],
+      ['Available crew', number(wf?.available), wf?.available == null ? 'Labor roster not cached on Dispatch yet. Open the Dispatch board once' : 'Active roster, no job today'],
       ['Pacific date', wf?.asOf || '-'],
     ]));
     for (const [status, title] of [['booked', 'Booked'], ['available', 'Available']]) {

@@ -65,6 +65,29 @@ import { makeCreditBalance, netlifyCreditBalance, workforceTrace } from '../netl
 import { makeOrganization } from '../netlify/functions/lib/sources.mjs';
 import { sanitize } from '../netlify/functions/lib/alerts.mjs';
 
+test('matches the Dispatch board: past-dated open jobs still hold crew, undated open jobs count, closed and stale rows do not', () => {
+  const today = '2026-11-16';
+  const wf = workforce({
+    jobs: [
+      { jobId: 'multi', reportDate: '2026-11-12', active: true, jobAddress: '12 Main St', updatedAt: '2026-11-15T20:00:00Z', crew: [{ id: 'c1', name: 'Ana Ruiz', phone: '+1 (714) 555-0101' }] },
+      { jobId: 'nodate', reportDate: '', active: true, updatedAt: '2026-11-16T01:00:00Z', crew: [{ id: 'c2', name: 'Bo Kim', phone: '7145550102' }] },
+      { jobId: 'night', reportDate: '2026-11-15', reportTime: '22:00', reportEndTime: '06:00', nightWork: true, active: true, crew: [{ id: 'c3', name: 'Cy Day' }] },
+      { jobId: 'closed', reportDate: today, active: false, crew: [{ id: 'c4', name: 'Dee' }] },
+      { jobId: 'old', reportDate: '2026-09-01', active: true, updatedAt: '2026-09-02T00:00:00Z', crew: [{ id: 'c5', name: 'Eve' }] },
+      { jobId: 'later', reportDate: '2026-11-18', active: true, crew: [{ id: 'c6', name: 'Fay' }] },
+      { jobId: 'dup', reportDate: today, active: true, crew: [{ id: 'other-id', name: 'ana ruiz', phone: '17145550101' }],
+        sentHome: [] },
+    ],
+    rosters: { labor: { data: { labor: [{ id: 'c1', name: 'Ana Ruiz', phone: '7145550101' }, { id: 'c6', name: 'Fay' }, { id: 'h1', name: 'Hidden Guy' }] } } },
+    manualWorkers: [{ contactId: 'm1', name: 'Gus', phone: '7145550199', isLabor: true }],
+    hiddenWorkers: [{ role: 'labor', name: 'Hidden Guy' }],
+  }, today);
+  assert.deepEqual(wf.crew.map(c => c.name).sort(), ['Ana Ruiz', 'Bo Kim', 'Cy Day']);
+  assert.equal(wf.crew.find(c => c.name === 'Ana Ruiz').job, '12 Main St');
+  assert.deepEqual(wf.bench.map(c => c.name).sort(), ['Fay', 'Gus']);
+  assert.equal(wf.jobs, 4);
+});
+
 test('Dispatch board shapes: board by date and flat assignments both count crew', () => {
   const today = '2026-11-16';
   const byDate = workforce({ board: { [today]: [{ id: 'j1', title: 'Harbor', assigned: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bo' }] }], '2026-11-17': [{ id: 'j2', crew: [{ id: 'c' }] }] } }, today);
@@ -72,10 +95,10 @@ test('Dispatch board shapes: board by date and flat assignments both count crew'
   assert.equal(byDate.crew[0].job, 'Harbor');
   const flat = workforce({ assignments: [
     { jobId: 'x', jobName: 'Main', date: today, workerId: 'a', workerName: 'Ana' }, { jobId: 'x', date: today, workerId: 'b', workerName: 'Bo' },
-    { jobId: 'y', date: '2026-11-15', workerId: 'c', workerName: 'Cy' }], workers: [{ id: 'c', name: 'Cy' }] }, today);
+    { jobId: 'y', date: '2026-11-17', workerId: 'c', workerName: 'Cy' }], workers: [{ id: 'c', name: 'Cy' }] }, today);
   assert.deepEqual([flat.booked, flat.jobs, flat.available], [2, 1, 1]);
   const trace = workforceTrace({ jobs: [{ jobId: 1, reportDate: '2026-11-10', crew: [] }, { jobId: 2, crew: [{ id: 'a' }] }] }, today);
-  assert.deepEqual([trace.otherDay, trace.noDate, trace.datesSeen], [1, 1, '2026-11-10 to 2026-11-10']);
+  assert.deepEqual([trace.noCrew, trace.today, trace.noDate, trace.datesSeen], [1, 1, 1, '2026-11-10 to 2026-11-10']);
   assert.match(trace.exportKeys, /jobs\[2\]/);
 });
 

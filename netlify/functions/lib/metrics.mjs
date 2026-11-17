@@ -116,13 +116,16 @@ export function pipelineSales(data, range, containerId, exclude = []) {
 }
 
 const fullName = p => String(p?.name || p?.fullName || p?.contactName || [p?.firstName, p?.lastName].filter(Boolean).join(' ') || '').trim();
-const jobLabel = j => String(j.jobName || j.name || j.title || j.customerName || j.customer?.name || j.siteName || j.address || '').trim();
+const jobLabel = j => String(j.jobName || j.name || j.title || j.clientName || j.customerName || j.customer?.name || j.jobAddress || j.siteName || j.address || '').trim();
 // Dispatch rosters may arrive under different keys. The first array found is used.
 const rosterOf = data => ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].map(k => data[k]).find(Array.isArray) || null;
 
 const jobDate = j => day(j.reportDate || j.date || j.scheduledDate || j.workDate || j.startDate || j.day);
 const jobEnd = j => day(j.reportEndDate || j.endDate || j.untilDate);
 const crewOf = j => ['crew', 'workers', 'assigned', 'assignedWorkers', 'laborers', 'team', 'employees'].map(k => j[k]).find(Array.isArray) || [];
+
+const STALE_DAYS = 21;
+const addDays = (ymd, n) => new Date(Date.parse(ymd + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 
 // Jobs from the Dispatch board, whatever shape the export uses: a jobs list, a board list, a board keyed by date,
 // or flat assignments (one row per worker per job per day).
@@ -152,14 +155,15 @@ export function boardJobs(data) {
 // Why each Dispatch job was or was not counted today. Field names only, no values, for Diagnostics.
 export function workforceTrace(data, today) {
   const jobs = boardJobs(data), dates = jobs.map(jobDate).filter(Boolean).sort();
-  const t = { jobs: jobs.length, today: 0, inactive: 0, noDate: 0, otherDay: 0, noCrew: 0, crewEntries: 0, datesSeen: dates.length ? dates[0] + ' to ' + dates.at(-1) : 'none' };
+  const t = { jobs: jobs.length, today: 0, inactive: 0, noDate: 0, carriedOver: 0, otherDay: 0, stale: 0, noCrew: 0, crewEntries: 0, datesSeen: dates.length ? dates[0] + ' to ' + dates.at(-1) : 'none' };
+  const staleDay = addDays(today, -STALE_DAYS);
   for (const j of jobs) {
-    const start = jobDate(j), end = jobEnd(j) || start, crew = crewOf(j);
-    if (j.active === false || /^(cancel|complete|closed)/i.test(String(j.status || ''))) t.inactive++;
-    else if (!start) t.noDate++;
-    else if (start > today || end < today) t.otherDay++;
+    const days = bookedDays(j, today), crew = crewOf(j), touched = day(j.updatedAt);
+    if (j.active === false || /complete|cancel|closed/i.test(String(j.status || j.stage || ''))) t.inactive++;
+    else if (days && !(days.start <= today && days.end >= today)) t.otherDay++;
+    else if ((!days || days.start < today) && touched && touched < staleDay) t.stale++;
     else if (!crew.length) t.noCrew++;
-    else { t.today++; t.crewEntries += crew.length; }
+    else { t.today++; t.crewEntries += crew.length; if (!days) t.noDate++; else if (days.start < today) t.carriedOver++; }
   }
   const keys = o => o && typeof o === 'object' ? Object.keys(o).slice(0, 30).join(', ') : 'none';
   const first = jobs[0];
@@ -169,39 +173,69 @@ export function workforceTrace(data, today) {
   return t;
 }
 
+// Mirrors the Dispatch board (index.html getLiveBookedIdentifiers / getEffectiveLaborStatus):
+// - open job: shared state active is not false and status is not complete or cancelled
+// - booked days: report date through end date (a night shift ending before it started rolls to the next day);
+//   an open job dated before today still holds its crew today; an open job with no date holds every day
+// - a worker is booked when on an open job whose days include today, matched by phone or name
+// - available: the labor roster (Make roster plus manual workers, minus hidden) not booked today
+// Rows untouched for STALE_DAYS are skipped: the board also drops jobs GoHighLevel closed, which this export cannot see.
+const phoneKey = raw => { const d = String(raw || '').replace(/\D/g, ''); return d.length === 11 && d.startsWith('1') ? d.slice(1) : d; };
+const nameKey = p => fullName(p).toLowerCase();
+function bookedDays(job, today) {
+  const start = jobDate(job);
+  if (!start) return null;
+  let end = jobEnd(job) || start;
+  if ((job.nightWork === true || job.nightWork === 'true') && job.reportTime && job.reportEndTime && end === start && job.reportEndTime <= job.reportTime) end = addDays(start, 1);
+  if (end < start) end = start;
+  if (start <= today && end < today) end = today;
+  return { start, end };
+}
+function laborRoster(data) {
+  const raw = data.rosters?.labor?.data;
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.labor) ? raw.labor : Array.isArray(raw?.laborers) ? raw.laborers : raw?.name || raw?.full_name ? [raw] : null;
+  const fallback = rosterOf(data);
+  if (!list && !fallback && !Array.isArray(data.manualWorkers)) return null;
+  const hidden = (data.hiddenWorkers || []).filter(h => h.role !== 'driver');
+  const isHidden = p => hidden.some(h => (h.contactId && h.contactId === (p.id || p.contactId)) || (h.phone && phoneKey(h.phone) === phoneKey(p.phone)) || (h.name && h.name.toLowerCase().trim() === nameKey(p)));
+  const people = [...(list || fallback || []).map(w => ({ id: w.id || w.contactId || w.contact_id || '', name: w.name || w.full_name || w.fullName || '', phone: w.phone || '', role: w.role || null, active: w.active, available: w.available, status: w.status })),
+    ...(data.manualWorkers || []).filter(m => m.isLabor !== false).map(m => ({ id: m.contactId, name: m.name, phone: m.phone, role: null }))];
+  return people.filter(p => fullName(p) && !isHidden(p) && p.active !== false && p.available !== false && !/^(inactive|terminated|archived)/i.test(String(p.status || '')));
+}
+
 export function workforce(data, today) {
-  const jobIds = new Set();
-  const people = new Map();
-  const identity = person => person?.id || person?.contactId || person?.workerId || (person?.phone || '').replace(/\D/g, '').slice(-10)
-    || fullName(person).toLowerCase();
+  const people = new Map(), jobIds = new Set(), phones = new Set(), names = new Set();
+  const stale = addDays(today, -STALE_DAYS);
   for (const job of boardJobs(data)) {
-    // Report dates may be plain dates or full timestamps. Compare them as Pacific dates.
-    const start = jobDate(job), end = jobEnd(job) || start;
-    if (job.active === false || String(job.status || '').toLowerCase().match(/^(cancel|complete|closed)/) || !start || start > today || end < today) continue;
-    const sentHome = new Set((job.sentHome || []).filter(p => !p.reportDate || day(p.reportDate) === today).map(identity).filter(Boolean));
+    if (job.active === false || /complete|cancel|closed/i.test(String(job.status || job.stage || ''))) continue;
+    const days = bookedDays(job, today);
+    if (days ? !(days.start <= today && days.end >= today) : false) continue;
+    const touched = day(job.updatedAt);
+    if ((!days || days.start < today) && touched && touched < stale) continue;
+    const away = new Set((job.sentHome || []).filter(p => !p.reportDate || day(p.reportDate) === today).flatMap(p => [phoneKey(p.phone), nameKey(p)]).filter(Boolean));
     for (const worker of crewOf(job)) {
-      const id = identity(worker);
-      if (!id || sentHome.has(id) || worker.sentHome === true) continue;
-      if (!people.has(id)) people.set(id, {
-        key: workerKey(id),
-        name: fullName(worker) || 'Crew member ' + (people.size + 1),
-        role: String(worker.role || worker.title || '').trim() || null,
-        job: jobLabel(job) || 'Job ' + job.jobId,
-      });
+      const ph = phoneKey(worker.phone), nm = nameKey(worker);
+      if (!ph && !nm) continue;
+      if (worker.sentHome === true || (ph && away.has(ph)) || (nm && away.has(nm))) continue;
+      const id = worker.id || worker.contactId || worker.workerId || ph || nm;
       jobIds.add(job.jobId);
+      if ((ph && phones.has(ph)) || (nm && names.has(nm))) continue;
+      if (ph) phones.add(ph);
+      if (nm) names.add(nm);
+      people.set(id, { key: workerKey(id), name: fullName(worker) || 'Crew member ' + (people.size + 1), role: String(worker.role || worker.title || '').trim() || null, job: jobLabel(job) || 'Job ' + job.jobId });
     }
   }
-// Available: Dispatch roster members who are active and not booked on a job today.
-  const roster = rosterOf(data);
+  const roster = laborRoster(data);
   const bench = new Map();
-  for (const person of roster || []) {
-    const id = identity(person);
-    if (!id || people.has(id) || bench.has(id) || person.active === false || person.available === false
-      || /^(inactive|terminated|archived)/i.test(String(person.status || ''))) continue;
-    bench.set(id, { key: workerKey(id), name: fullName(person) || 'Crew member ' + (people.size + bench.size + 1), role: String(person.role || person.title || '').trim() || null });
+  for (const p of roster || []) {
+    const ph = phoneKey(p.phone), nm = nameKey(p);
+    if ((ph && phones.has(ph)) || (nm && names.has(nm))) continue;
+    const id = p.id || ph || nm;
+    if (bench.has(id) || [...bench.values()].some(b => b._n === nm && nm)) continue;
+    bench.set(id, { key: workerKey(id), name: fullName(p), role: String(p.role || '').trim() || null, _n: nm });
   }
   return { workers: people.size, booked: people.size, available: roster ? bench.size : null, jobs: jobIds.size, asOf: today,
-    crew: [...people.values()], bench: [...bench.values()] };
+    crew: [...people.values()], bench: [...bench.values()].map(({ _n, ...b }) => b) };
 }
 
 export function runway(ledger, cashFeed, env, today) {

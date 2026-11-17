@@ -89,7 +89,7 @@ Open **Alerts** in the header. Every metric on the dashboard can have one rule: 
 
 ## Workforce
 
-Booked crew is read from the Dispatch board for today: `jobs`, a `board` list or a `board` keyed by date, or flat `assignments` rows (one per worker per job per day). Dates may be plain dates or timestamps. Available crew needs a roster array (`workers`, `roster`, `employees`, `crewMembers` or `laborers`). Diagnostics, Dispatch export shows the export's keys and field names (no values) and why each job was or was not counted.
+Booked and available follow the Dispatch board's own rules (`getLiveBookedIdentifiers`): a worker is booked when on an open job (not closed, not Completed or Cancelled) whose days include today. A job dated earlier that is still open holds its crew today, an open job with no date counts, a night shift ending before it started runs to the next morning, and workers sent home today drop off. Workers are matched by phone or name, like the board. Available is the board's labor roster (the cached Make roster plus manual workers, minus hidden workers) not booked today. The board also drops jobs that GoHighLevel closed; the export cannot see that, so open rows untouched for 21 days are skipped. Diagnostics, Dispatch export shows how each job was counted.
 
 ## Credits
 
