@@ -99,6 +99,9 @@ body { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
 .field input { color: #fff; }
 .switch { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; font-weight: 600; }
 .switch input, .rule input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
+.billing { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 16px; margin: 4px 0 0; padding: 14px; border: 1px solid #283029; border-radius: 12px; }
+.billing legend { padding: 0 6px; font-weight: 650; font-size: .85rem; }
+.billing legend .muted { display: block; font-weight: 400; font-size: .74rem; }
 .actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
 .primary { background: var(--accent); color: #1c1309; border-color: var(--accent); font-weight: 650; }
 #alert-status { grid-column: 1 / -1; min-height: 1.2em; }
@@ -212,6 +215,7 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
   .identity { display: none; }
   .brain .detail { top: auto; max-height: 58%; left: 10px; right: 10px; bottom: 10px; width: auto; }
   .webhook { grid-template-columns: 1fr; }
+  .billing { grid-template-columns: 1fr; }
   .views a { padding: 7px 9px; font-size: .82rem; }
   .rule { grid-template-columns: 30px minmax(0, 1fr) auto; }
   .rule.head { display: none; }

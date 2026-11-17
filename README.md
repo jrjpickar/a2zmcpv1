@@ -89,7 +89,11 @@ Open **Alerts** in the header. Every metric on the dashboard can have one rule: 
 
 ## Workforce
 
-Booked crew comes from today's active Dispatch jobs. Available crew needs a `workers` array in the Dispatch export (`id` or `phone`, `name`, optional `role`, `active`, `available`). Until Dispatch sends it, the dashboard shows available as not reported.
+Booked crew is read from the Dispatch board for today: `jobs`, a `board` list or a `board` keyed by date, or flat `assignments` rows (one per worker per job per day). Dates may be plain dates or timestamps. Available crew needs a roster array (`workers`, `roster`, `employees`, `crewMembers` or `laborers`). Diagnostics, Dispatch export shows the export's keys and field names (no values) and why each job was or was not counted.
+
+## Credits
+
+Make credits come live from the Make organization (allowance minus consumed) when Make reports them, else allowance minus usage since the last reset. Netlify has no credit API: enter the balance from Usage and billing in Alerts, Billing inputs. `MAKE_CYCLE_*` and `NETLIFY_CREDITS_*` env vars still work as fallbacks.
 
 ## Checks after deployment
 

@@ -1,11 +1,11 @@
 // Alert rules on every dashboard metric. Settings and send state live in Netlify Blobs.
 // A matching rule posts one JSON payload to the configured webhook (Make by default), then waits out its cooldown.
-import { getStore } from '@netlify/blobs';
+import { appStore, SETTINGS_KEY } from './store.mjs';
 import { report as buildReport } from './report.mjs';
 
 export const DEFAULT_WEBHOOK = 'https://hook.us2.make.com/bjl5ooam64m8csp4glmr3bxbykc9cpi5';
 export const PRESETS = ['today', 'wtd', 'mtd', '30d', 'ytd'];
-const SETTINGS_KEY = 'alerts/settings', STATE_KEY = 'alerts/state', RUN_KEY = 'alerts/lastRun';
+const STATE_KEY = 'alerts/state', RUN_KEY = 'alerts/lastRun';
 const usd = v => v == null ? 'n/a' : '$' + Math.round(v).toLocaleString('en-US');
 const count = v => v == null ? 'n/a' : Math.round(v * 10) / 10 + '';
 
@@ -43,7 +43,7 @@ export function catalog(report) {
 const sourceNames = { estimating: 'Estimating feed', dispatch: 'Dispatch feed', ledger: 'Ledger feed', cash: 'Cash balance feed', ghl: 'GoHighLevel', twilio: 'Twilio API', make: 'Make API' };
 
 export function defaults() {
-  return { webhookUrl: DEFAULT_WEBHOOK, enabled: true, cooldownMinutes: 240, rules: {} };
+  return { webhookUrl: DEFAULT_WEBHOOK, enabled: true, cooldownMinutes: 240, rules: {}, billing: {} };
 }
 
 // Accept only known fields. Rules: { [metricKey]: { enabled, op: above|below|not_ok, threshold, preset } }
@@ -59,6 +59,12 @@ export function sanitize(input) {
   const cooldown = Number(input.cooldownMinutes ?? out.cooldownMinutes);
   if (!Number.isFinite(cooldown) || cooldown < 15 || cooldown > 10080) throw new RangeError('Cooldown must be 15 to 10080 minutes');
   out.cooldownMinutes = Math.round(cooldown);
+  // Billing inputs Netlify and Make do not expose by API. Blank fields are dropped.
+  const b = input.billing && typeof input.billing === 'object' ? input.billing : {};
+  const num = (k, max) => { if (b[k] === '' || b[k] == null) return; const v = Number(b[k]); if (!Number.isFinite(v) || v < 0 || v > max) throw new RangeError('Invalid ' + k); out.billing[k] = v; };
+  const date = k => { if (!b[k]) return; if (!/^\d{4}-\d{2}-\d{2}$/.test(b[k])) throw new RangeError(k + ' must be YYYY-MM-DD'); out.billing[k] = b[k]; };
+  num('netlifyCreditsRemaining', 1e9); date('netlifyCreditsAsOf'); num('netlifyMonthlyCredits', 1e9); num('makeCycleCredits', 1e10);
+  if (out.billing.netlifyCreditsRemaining != null && !out.billing.netlifyCreditsAsOf) throw new RangeError('Add the date the Netlify credits were read');
   const rules = input.rules && typeof input.rules === 'object' ? input.rules : {};
   if (Object.keys(rules).length > 200) throw new RangeError('Too many rules');
   for (const [key, rule] of Object.entries(rules)) {
@@ -73,17 +79,10 @@ export function sanitize(input) {
   return out;
 }
 
-function memoryStore() {
-  const m = new Map();
-  return { async get(k) { return m.has(k) ? JSON.parse(m.get(k)) : null; }, async setJSON(k, v) { m.set(k, JSON.stringify(v)); } };
-}
-let fallback = null;
-export function alertStore() {
-  try { return getStore({ name: 'a2z-operations', consistency: 'strong' }); } catch { return (fallback ||= memoryStore()); }
-}
+export const alertStore = appStore;
 export async function loadSettings(store = alertStore()) {
   const saved = await store.get(SETTINGS_KEY, { type: 'json' }).catch(() => null);
-  return saved ? { ...defaults(), ...saved, rules: saved.rules || {} } : defaults();
+  return saved ? { ...defaults(), ...saved, rules: saved.rules || {}, billing: saved.billing || {} } : defaults();
 }
 export async function saveSettings(input, store = alertStore()) {
   const clean = sanitize(input);

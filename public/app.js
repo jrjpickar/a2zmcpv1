@@ -216,9 +216,9 @@ function details(tile) {
     panel.append(rows([
       ['Balances'],
       ['Twilio balance', money(system.twilio?.balance, system.twilio?.currency), system.twilio?.asOf && 'Checked ' + system.twilio.asOf.slice(0, 10)],
-      ['Make credits remaining', number(system.make.balance), system.make.asOf ? system.make.basis + ' · ' + system.make.asOf : 'Billing snapshot or cycle inputs needed'],
+      ['Make credits remaining', number(system.make.balance), [system.make.basis, system.make.allowance != null && number(system.make.allowance) + ' per cycle', system.make.nextReset && 'resets ' + system.make.nextReset].filter(Boolean).join(' · ')],
       ['Make credits used', number(system.make.usage30d), 'API usage over the last 30 days'],
-      ['Netlify credits remaining', number(system.netlify.balance), system.netlify.asOf ? system.netlify.basis + ' · ' + system.netlify.asOf : 'Billing snapshot needed'],
+      ['Netlify credits remaining', number(system.netlify.balance), system.netlify.asOf ? system.netlify.basis + ' · read ' + system.netlify.asOf : system.netlify.basis],
       ['Deploys'],
       ...deployRows,
       ['Dispatch'],
@@ -400,6 +400,10 @@ function renderSettings() {
   $('webhook').value = settings.webhookUrl;
   $('cooldown').value = settings.cooldownMinutes;
   $('alerts-on').checked = settings.enabled;
+  const billing = settings.billing || {};
+  $('netlify-credits').value = billing.netlifyCreditsRemaining ?? '';
+  $('netlify-asof').value = billing.netlifyCreditsAsOf || '';
+  $('make-cycle').value = billing.makeCycleCredits ?? '';
   for (const el of $('alert-form').elements) el.disabled = !canEdit;
   if (!canEdit) $('alert-status').textContent = 'Read only. Unlock with the dashboard key to save or send.';
   const firing = new Set(alerts.map(a => a.id));
@@ -440,7 +444,9 @@ function readSettings() {
     if (enabled && op !== 'not_ok' && threshold === '') throw new Error('Add a threshold for ' + row.querySelector('.metric').textContent);
     rules[row.dataset.key] = { enabled, op, threshold: threshold === '' ? null : Number(threshold), preset: get('preset').value };
   }
-  return { webhookUrl: $('webhook').value.trim(), cooldownMinutes: Number($('cooldown').value), enabled: $('alerts-on').checked, rules };
+  const billing = { netlifyCreditsRemaining: $('netlify-credits').value, netlifyCreditsAsOf: $('netlify-asof').value || (($('netlify-credits').value !== '') ? new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }) : ''),
+    makeCycleCredits: $('make-cycle').value };
+  return { webhookUrl: $('webhook').value.trim(), cooldownMinutes: Number($('cooldown').value), enabled: $('alerts-on').checked, rules, billing };
 }
 async function alertRequest(method, body, done) {
   $('alert-status').textContent = 'Working…';

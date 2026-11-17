@@ -1,6 +1,7 @@
 import { number } from './http.mjs';
-import { cashBalance, containerPipelineId, exportFeed, wonSales, makeUsage, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
-import { containerSales as summarizeContainers, day, funnel, pipelineSales, signals, makeCreditBalance, rangeFor, runway, workforce } from './metrics.mjs';
+import { cashBalance, containerPipelineId, exportFeed, makeAccount, wonSales, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
+import { containerSales as summarizeContainers, day, funnel, pipelineSales, signals, makeCreditBalance, netlifyCreditBalance, rangeFor, runway, workforce, workforceTrace } from './metrics.mjs';
+import { appStore, SETTINGS_KEY } from './store.mjs';
 
 const cache = new WeakMap();
 const ttl = 90_000;
@@ -47,7 +48,7 @@ function sample(today) {
       { id: 'l2', name: 'Labor crew, Tustin school', pipelineId: 'labor', status: 'won', at: today },
     ] },
     twilio: { balance: 48.72, currency: 'USD', asOf: today },
-    make: [{ date: today, credits: 296 }],
+    make: { usage: [{ date: today, credits: 296 }], org: { allowance: 5500, consumed: 296, lastReset: today.slice(0, 8) + '01T00:00:00Z', nextReset: null, fields: [] } },
     builds: Object.fromEntries(Object.keys(siteKeys).map(name => [name, { state: 'ready', publishedAt: today, latestState: 'ready' }])),
   };
 }
@@ -56,7 +57,7 @@ async function readSources(env, today) {
   if (env.DATA_MODE === 'sample') {
     const { builds, ...data } = sample(today);
     const ok = data => ({ status: 'ok', data, ms: 0, checkedAt: new Date().toISOString() });
-    return { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, ok(v)])), builds: Object.fromEntries(Object.entries(builds).map(([k, v]) => [k, ok(v)])) };
+    return { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, ok(v)])), billing: { status: 'ok', data: {} }, builds: Object.fromEntries(Object.entries(builds).map(([k, v]) => [k, ok(v)])) };
   }
 
   const signal = AbortSignal.timeout(16000);
@@ -79,7 +80,9 @@ async function readSources(env, today) {
     ledger,
     ghl: source(() => wonSales(env, signal)),
     twilio: source(() => twilioBalance(env)),
-    make: source(() => makeUsage(env)),
+    make: source(() => makeAccount(env)),
+    // Billing inputs saved on the Alerts page. Read with the other sources, so once per cache window.
+    billing: env.DATA_MODE === 'test' ? { status: 'ok', data: {} } : appStore().get(SETTINGS_KEY, { type: 'json' }).then(s => ({ status: 'ok', data: s?.billing || {} })).catch(() => ({ status: 'ok', data: {} })),
     builds: Promise.all(Object.entries(siteKeys).map(async ([name, key]) => [name, await source(() => netlifyDeploy(env, key))])).then(Object.fromEntries),
   };
   return Object.fromEntries(await Promise.all(Object.entries(tasks).map(async ([name, task]) => [name, await task])));
@@ -105,13 +108,12 @@ export async function report(input = {}, env = process.env, now = new Date()) {
   const today = day(now);
   const sources = await cachedSources(env, today);
   const { estimating, dispatch, ledger, cash, ghl, twilio, make, builds } = sources;
+  const billing = sources.billing?.data || {};
   const demonstration = env.DATA_MODE === 'sample';
   const config = demonstration ? {
     MONTHLY_CASH_BURN_USD: '29000',
     MAKE_CYCLE_START: today, MAKE_CYCLE_CREDITS: '5500', NETLIFY_CREDITS_REMAINING: '232', NETLIFY_CREDITS_AS_OF: today,
   } : env;
-  const netlifyBalance = number(config.NETLIFY_CREDITS_REMAINING);
-  const netlifyDate = day(config.NETLIFY_CREDITS_AS_OF);
   const status = ({ status, detail }) => ({ status, detail });
   // All sales values come from GoHighLevel won opportunities. The Labor pipeline is Labor sales; the rest are pipeline sales.
   const sales = { pipelines: null, labor: null };
@@ -140,9 +142,8 @@ export async function report(input = {}, env = process.env, now = new Date()) {
     system: {
       sources: Object.fromEntries(Object.entries({ estimating, dispatch, ledger, cash, ghl, twilio, make }).map(([name, state]) => [name, status(state)])),
       deploys: Object.fromEntries(Object.entries(builds).map(([name, result]) => [name, { ...status(result), ...result.data }])),
-      make: makeCreditBalance(make.data, config, today),
-      netlify: { balance: netlifyDate && netlifyDate <= today && netlifyBalance >= 0 ? netlifyBalance : null,
-        asOf: netlifyDate && netlifyDate <= today ? netlifyDate : null, basis: 'Manual billing snapshot' },
+      make: makeCreditBalance(make.data, config, today, billing),
+      netlify: netlifyCreditBalance(config, today, billing),
       twilio: twilio.data ?? null,
       dispatch: dispatch.data?.health && {
         pendingSyncs: number(dispatch.data.health.pendingGhlScheduleSyncs),
@@ -172,16 +173,20 @@ const count = v => Array.isArray(v) ? v.length : null;
 const labels = { estimating: 'Estimating Desk export', dispatch: 'Dispatch export', ledger: 'Ledger export', cash: 'Bank cash balance',
   ghl: 'GoHighLevel opportunities', twilio: 'Twilio balance API', make: 'Make usage API' };
 
-function records(name, data) {
+function records(name, data, today) {
   if (!data) return null;
   if (name === 'estimating') return { opportunities: count(data.opportunities), pipelines: count(data.pipelines), events: count(data.history?.events) };
   if (name === 'dispatch') {
     const roster = ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].find(k => Array.isArray(data[k]));
-    return { jobs: count(data.jobs), bookings: count(data.bookings), roster: roster ? data[roster].length : 'missing', crewOnJobs: (data.jobs || []).reduce((t, j) => t + (j.crew || j.workers || []).length, 0) };
+    const t = workforceTrace(data, today);
+    return { jobsOnBoard: t.jobs, jobsToday: t.today, crewToday: t.crewEntries, skippedInactive: t.inactive, skippedNoDate: t.noDate, skippedOtherDay: t.otherDay,
+      skippedNoCrew: t.noCrew, datesSeen: t.datesSeen, roster: roster ? data[roster].length : 'missing', exportKeys: t.exportKeys, jobFields: t.jobFields, crewFields: t.crewFields };
   }
   if (name === 'ledger') return { bills: count(data.bills), bankStatus: data.cashBalance?.status || 'not sent' };
   if (name === 'ghl') return { wonOpportunities: count(data.opportunities), pipelines: count(data.pipelines) };
-  if (name === 'make') return { days: count(data), credits30d: Math.round(data.reduce((t, r) => t + r.credits, 0)) };
+  if (name === 'make') return { days: count(data.usage), credits30d: Math.round((data.usage || []).reduce((t, r) => t + r.credits, 0)),
+    planAllowance: data.org?.allowance ?? 'not reported', consumed: data.org?.consumed ?? 'not reported', lastReset: data.org?.lastReset?.slice(0, 10) || 'not reported',
+    organizationFields: data.org ? data.org.fields.join(', ') || 'none' : 'organization call failed' };
   if (name === 'twilio') return { balance: data.balance, currency: data.currency };
   if (name === 'cash') return { balance: data.balance, asOf: data.asOf };
   return null;
@@ -194,9 +199,9 @@ export async function diagnostics({ env = process.env, now = new Date(), fresh =
   const started = Date.now();
   const sources = await cachedSources(env, today);
   const cached = cache.get(env);
-  const { builds, ...feeds } = sources;
+  const { builds, billing, ...feeds } = sources;
   const checks = Object.entries(feeds).map(([name, r]) => ({ id: 'source:' + name, group: 'Data sources', label: labels[name] || name,
-    status: r.status, detail: r.detail || null, ms: r.ms ?? null, checkedAt: r.checkedAt || null, records: records(name, r.data) }));
+    status: r.status, detail: r.detail || null, ms: r.ms ?? null, checkedAt: r.checkedAt || null, records: records(name, r.data, today) }));
   for (const [name, r] of Object.entries(builds)) checks.push({ id: 'deploy:' + name, group: 'Deploys', label: name + ' production deploy',
     status: r.status === 'ok' ? (r.data.state === 'ready' ? 'ok' : 'error') : r.status, detail: r.detail || (r.data && ['state ' + r.data.state,
       r.data.latestState && r.data.latestState !== r.data.state && 'latest build ' + r.data.latestState].filter(Boolean).join(', ')) || null,
@@ -220,8 +225,9 @@ export async function diagnostics({ env = process.env, now = new Date(), fresh =
     Ledger: has(env, 'LEDGER_URL', 'LEDGER_EXPORT_KEY'),
     GoHighLevel: has(env, 'GHL_PIT_TOKEN', 'GHL_LOCATION_ID', 'CONTAINER_PIPELINE_ID'),
     Twilio: has(env, 'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN'),
-    Make: has(env, 'MAKE_ZONE', 'MAKE_ORG_ID', 'MAKE_API_TOKEN', 'MAKE_CYCLE_CREDITS', 'MAKE_CYCLE_START'),
-    Netlify: has(env, 'NETLIFY_ACCESS_TOKEN', 'ESTIMATING_NETLIFY_SITE_ID', 'DISPATCH_NETLIFY_SITE_ID', 'LEDGER_NETLIFY_SITE_ID', 'NETLIFY_CREDITS_REMAINING', 'NETLIFY_CREDITS_AS_OF'),
+    Make: has(env, 'MAKE_ZONE', 'MAKE_ORG_ID', 'MAKE_API_TOKEN'),
+    Netlify: has(env, 'NETLIFY_ACCESS_TOKEN', 'ESTIMATING_NETLIFY_SITE_ID', 'DISPATCH_NETLIFY_SITE_ID', 'LEDGER_NETLIFY_SITE_ID'),
+    'Billing inputs (Alerts page)': { netlifyCreditsRemaining: billing?.data?.netlifyCreditsRemaining != null, makeCycleCredits: billing?.data?.makeCycleCredits != null },
     Groq: has(env, 'GROQ_API_KEY', 'GROQ_MODEL'),
   };
   return {

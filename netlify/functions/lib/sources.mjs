@@ -130,6 +130,28 @@ export async function makeUsage(env) {
   });
 }
 
+// Organization details carry the plan allowance and reset dates. Field names vary by plan, so several are tried.
+export async function makeOrganization(env) {
+  const zone = makeZone(required(env, 'MAKE_ZONE'));
+  const org = required(env, 'MAKE_ORG_ID');
+  const token = required(env, 'MAKE_API_TOKEN').replace(/^Token\s+/i, '');
+  const data = await readJson('https://' + zone + '/api/v2/organizations/' + org, { headers: { Authorization: 'Token ' + token, Accept: 'application/json' } });
+  const o = data?.organization || {}, lic = o.license || {};
+  const first = (...v) => v.map(number).find(x => x !== null) ?? null;
+  const centi = first(o.consumedCenticredits, lic.consumedCenticredits);
+  return {
+    allowance: first(o.credits, lic.credits, o.operations, lic.operations, o.operationsLimit, lic.operationsLimit),
+    consumed: centi !== null ? centi / 100 : first(o.consumedCredits, o.consumedOperations, lic.consumedOperations),
+    lastReset: o.lastReset || null, nextReset: o.nextReset || null,
+    fields: [...Object.keys(o).filter(k => /credit|operation|reset|limit/i.test(k)), ...Object.keys(lic).filter(k => /credit|operation/i.test(k)).map(k => 'license.' + k)],
+  };
+}
+
+export async function makeAccount(env) {
+  const [usage, org] = await Promise.all([makeUsage(env), makeOrganization(env).catch(() => null)]);
+  return { usage, org };
+}
+
 export async function cashBalance(env) {
   const url = new URL(required(env, 'CASH_BALANCE_URL'));
   if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid cash balance URL');

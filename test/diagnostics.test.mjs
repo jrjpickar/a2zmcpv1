@@ -60,3 +60,43 @@ test('diagnostics needs the key, lists every source and never returns secret val
   assert.equal(body.config.Groq.GROQ_API_KEY, true);
   assert.equal(body.checks.find(c => c.id === 'source:dispatch').records.roster, 9 + 14);
 });
+
+import { makeCreditBalance, netlifyCreditBalance, workforceTrace } from '../netlify/functions/lib/metrics.mjs';
+import { makeOrganization } from '../netlify/functions/lib/sources.mjs';
+import { sanitize } from '../netlify/functions/lib/alerts.mjs';
+
+test('Dispatch board shapes: board by date and flat assignments both count crew', () => {
+  const today = '2026-11-16';
+  const byDate = workforce({ board: { [today]: [{ id: 'j1', title: 'Harbor', assigned: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bo' }] }], '2026-11-17': [{ id: 'j2', crew: [{ id: 'c' }] }] } }, today);
+  assert.equal(byDate.booked, 2);
+  assert.equal(byDate.crew[0].job, 'Harbor');
+  const flat = workforce({ assignments: [
+    { jobId: 'x', jobName: 'Main', date: today, workerId: 'a', workerName: 'Ana' }, { jobId: 'x', date: today, workerId: 'b', workerName: 'Bo' },
+    { jobId: 'y', date: '2026-11-15', workerId: 'c', workerName: 'Cy' }], workers: [{ id: 'c', name: 'Cy' }] }, today);
+  assert.deepEqual([flat.booked, flat.jobs, flat.available], [2, 1, 1]);
+  const trace = workforceTrace({ jobs: [{ jobId: 1, reportDate: '2026-11-10', crew: [] }, { jobId: 2, crew: [{ id: 'a' }] }] }, today);
+  assert.deepEqual([trace.otherDay, trace.noDate, trace.datesSeen], [1, 1, '2026-11-10 to 2026-11-10']);
+  assert.match(trace.exportKeys, /jobs\[2\]/);
+});
+
+test('Make credits come from the organization when it reports allowance and use', async t => {
+  t.mock.method(globalThis, 'fetch', async url => {
+    assert.equal(url, 'https://us2.make.com/api/v2/organizations/7');
+    return Response.json({ organization: { id: 7, license: { operations: '10000' }, consumedOperations: 2500, lastReset: '2026-11-01T00:00:00Z', nextReset: '2026-12-01T00:00:00Z' } });
+  });
+  const org = await makeOrganization({ MAKE_ZONE: 'us2.make.com', MAKE_ORG_ID: '7', MAKE_API_TOKEN: 'x' });
+  const live = makeCreditBalance({ usage: [], org }, {}, '2026-11-16');
+  assert.deepEqual([live.balance, live.basis, live.nextReset], [7500, 'Live from Make organization', '2026-11-30']);
+  const fromUsage = makeCreditBalance({ usage: [{ date: '2026-11-02', credits: 40 }, { date: '2026-10-30', credits: 99 }], org: { allowance: null, consumed: null, lastReset: '2026-11-01T00:00:00Z' } },
+    {}, '2026-11-16', { makeCycleCredits: 100 });
+  assert.equal(fromUsage.balance, 60);
+  assert.match(makeCreditBalance({ usage: [], org: null }, {}, '2026-11-16').basis, /Billing inputs/);
+});
+
+test('Netlify credits use the snapshot saved on the Alerts page', () => {
+  assert.equal(netlifyCreditBalance({}, '2026-11-16').balance, null);
+  const n = netlifyCreditBalance({ NETLIFY_CREDITS_REMAINING: '5' }, '2026-11-16', { netlifyCreditsRemaining: 812, netlifyCreditsAsOf: '2026-11-14' });
+  assert.deepEqual([n.balance, n.ageDays], [812, 2]);
+  assert.throws(() => sanitize({ billing: { netlifyCreditsRemaining: 10 } }), /date/);
+  assert.deepEqual(sanitize({ billing: { netlifyCreditsRemaining: '10', netlifyCreditsAsOf: '2026-11-16', makeCycleCredits: '' } }).billing, { netlifyCreditsRemaining: 10, netlifyCreditsAsOf: '2026-11-16' });
+});

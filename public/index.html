@@ -51,6 +51,12 @@
         <label class="field wide"><span>Webhook URL</span><input id="webhook" type="url" required placeholder="https://hook.us2.make.com/..."></label>
         <label class="field"><span>Cooldown (minutes)</span><input id="cooldown" type="number" min="15" max="10080" step="1" required></label>
         <label class="switch"><input id="alerts-on" type="checkbox"><span>Alerts on</span></label>
+        <fieldset class="billing">
+          <legend>Billing inputs <span class="muted">Netlify has no credit API. Make credits per cycle are only needed if Make does not report the plan allowance (check Diagnostics).</span></legend>
+          <label class="field"><span>Netlify credits remaining</span><input id="netlify-credits" type="number" min="0" step="any" placeholder="From Usage and billing"></label>
+          <label class="field"><span>Read on</span><input id="netlify-asof" type="date"></label>
+          <label class="field"><span>Make credits per cycle</span><input id="make-cycle" type="number" min="0" step="any" placeholder="Optional"></label>
+        </fieldset>
         <div class="actions">
           <button type="submit" id="save" class="primary">Save</button>
           <button type="button" id="test">Send test</button>

@@ -120,17 +120,66 @@ const jobLabel = j => String(j.jobName || j.name || j.title || j.customerName ||
 // Dispatch rosters may arrive under different keys. The first array found is used.
 const rosterOf = data => ['workers', 'roster', 'employees', 'crewMembers', 'laborers'].map(k => data[k]).find(Array.isArray) || null;
 
+const jobDate = j => day(j.reportDate || j.date || j.scheduledDate || j.workDate || j.startDate || j.day);
+const jobEnd = j => day(j.reportEndDate || j.endDate || j.untilDate);
+const crewOf = j => ['crew', 'workers', 'assigned', 'assignedWorkers', 'laborers', 'team', 'employees'].map(k => j[k]).find(Array.isArray) || [];
+
+// Jobs from the Dispatch board, whatever shape the export uses: a jobs list, a board list, a board keyed by date,
+// or flat assignments (one row per worker per job per day).
+export function boardJobs(data) {
+  const jobs = [...(Array.isArray(data.jobs) ? data.jobs : [])];
+  const board = data.board || data.dispatchBoard;
+  if (Array.isArray(board)) jobs.push(...board);
+  else if (board && typeof board === 'object') {
+    if (Array.isArray(board.jobs)) jobs.push(...board.jobs);
+    for (const [k, v] of Object.entries(board)) if (/^\d{4}-\d{2}-\d{2}/.test(k) && Array.isArray(v)) jobs.push(...v.map(j => ({ reportDate: k, ...j })));
+  }
+  const rows = ['assignments', 'dispatches', 'schedule', 'boardAssignments'].map(k => data[k]).find(Array.isArray);
+  if (rows) {
+    const grouped = new Map();
+    for (const a of rows) {
+      const d = day(a.date || a.reportDate || a.workDate || a.day), jobId = a.jobId || a.job?.id || a.opportunityId || 'job';
+      const k = jobId + '|' + d;
+      if (!grouped.has(k)) grouped.set(k, { jobId, name: a.jobName || a.job?.name || a.jobTitle, reportDate: d, active: a.active, status: a.status, crew: [] });
+      grouped.get(k).crew.push(a.worker || { id: a.workerId || a.contactId, name: a.workerName || a.name, phone: a.phone, role: a.role, sentHome: a.sentHome });
+    }
+    jobs.push(...grouped.values());
+  }
+  // Deduplicate the same job and day across shapes.
+  return [...new Map(jobs.map(j => [(j.jobId || j.id || j.opportunityId || Math.random()) + '|' + jobDate(j), { ...j, jobId: j.jobId || j.id || j.opportunityId }])).values()];
+}
+
+// Why each Dispatch job was or was not counted today. Field names only, no values, for Diagnostics.
+export function workforceTrace(data, today) {
+  const jobs = boardJobs(data), dates = jobs.map(jobDate).filter(Boolean).sort();
+  const t = { jobs: jobs.length, today: 0, inactive: 0, noDate: 0, otherDay: 0, noCrew: 0, crewEntries: 0, datesSeen: dates.length ? dates[0] + ' to ' + dates.at(-1) : 'none' };
+  for (const j of jobs) {
+    const start = jobDate(j), end = jobEnd(j) || start, crew = crewOf(j);
+    if (j.active === false || /^(cancel|complete|closed)/i.test(String(j.status || ''))) t.inactive++;
+    else if (!start) t.noDate++;
+    else if (start > today || end < today) t.otherDay++;
+    else if (!crew.length) t.noCrew++;
+    else { t.today++; t.crewEntries += crew.length; }
+  }
+  const keys = o => o && typeof o === 'object' ? Object.keys(o).slice(0, 30).join(', ') : 'none';
+  const first = jobs[0];
+  t.exportKeys = Object.entries(data).map(([k, v]) => k + (Array.isArray(v) ? '[' + v.length + ']' : v && typeof v === 'object' ? '{}' : '')).join(', ');
+  t.jobFields = keys(first);
+  t.crewFields = keys(first && crewOf(first)[0]);
+  return t;
+}
+
 export function workforce(data, today) {
   const jobIds = new Set();
   const people = new Map();
   const identity = person => person?.id || person?.contactId || person?.workerId || (person?.phone || '').replace(/\D/g, '').slice(-10)
     || fullName(person).toLowerCase();
-  for (const job of data.jobs) {
+  for (const job of boardJobs(data)) {
     // Report dates may be plain dates or full timestamps. Compare them as Pacific dates.
-    const start = day(job.reportDate), end = day(job.reportEndDate) || start;
+    const start = jobDate(job), end = jobEnd(job) || start;
     if (job.active === false || String(job.status || '').toLowerCase().match(/^(cancel|complete|closed)/) || !start || start > today || end < today) continue;
     const sentHome = new Set((job.sentHome || []).filter(p => !p.reportDate || day(p.reportDate) === today).map(identity).filter(Boolean));
-    for (const worker of job.crew || job.workers || []) {
+    for (const worker of crewOf(job)) {
       const id = identity(worker);
       if (!id || sentHome.has(id) || worker.sentHome === true) continue;
       if (!people.has(id)) people.set(id, {
@@ -176,21 +225,36 @@ export function runway(ledger, cashFeed, env, today) {
   };
 }
 
-export function makeCreditBalance(rows, env, today) {
-  const start = day(env.MAKE_CYCLE_START);
-  const total = number(env.MAKE_CYCLE_CREDITS);
-  const captured = number(env.MAKE_CREDITS_REMAINING);
-  const capturedAt = day(env.MAKE_CREDITS_AS_OF);
+// Make credits remaining, best source first: live organization allowance minus consumed, allowance minus usage since the
+// last reset, the env cycle inputs, then a manual snapshot. data is { usage, org } (or a plain usage array).
+export function makeCreditBalance(data, env, today, billing = {}) {
+  const rows = Array.isArray(data) ? data : data?.usage || null, org = Array.isArray(data) ? null : data?.org || null;
   const usage30d = rows ? rows.reduce((sum, row) => sum + row.credits, 0) : null;
-  // Make exposes up to 30 days. Do not extrapolate a longer billing cycle.
-  if (rows && start >= shift(today, -28) && start <= today && total !== null && total >= 0) {
-    const used = rows.filter(r => r.date >= start).reduce((sum, r) => sum + r.credits, 0);
-    return { balance: Math.max(0, total - used), basis: 'Estimated from current cycle allowance and Make usage', asOf: today, usage30d };
+  const allowance = org?.allowance ?? number(billing.makeCycleCredits) ?? number(env.MAKE_CYCLE_CREDITS);
+  const nextReset = day(org?.nextReset) || null;
+  if (allowance !== null && org?.consumed != null) {
+    return { balance: Math.max(0, allowance - org.consumed), allowance, used: org.consumed, basis: 'Live from Make organization', asOf: today, nextReset, usage30d };
   }
-  return {
-    balance: capturedAt && capturedAt <= today && captured >= 0 ? captured : null,
-    basis: 'Manual billing snapshot', asOf: capturedAt && capturedAt <= today ? capturedAt : null, usage30d,
-  };
+  const reset = day(org?.lastReset) || day(env.MAKE_CYCLE_START);
+  // Make usage covers 30 days. Do not extrapolate a longer cycle.
+  if (rows && allowance !== null && reset && reset >= shift(today, -28) && reset <= today) {
+    const used = rows.filter(r => r.date >= reset).reduce((sum, r) => sum + r.credits, 0);
+    return { balance: Math.max(0, allowance - used), allowance, used, basis: 'Allowance minus Make usage since ' + reset, asOf: today, nextReset, usage30d };
+  }
+  const captured = number(env.MAKE_CREDITS_REMAINING), capturedAt = day(env.MAKE_CREDITS_AS_OF);
+  if (capturedAt && capturedAt <= today && captured >= 0) return { balance: captured, basis: 'Manual billing snapshot', asOf: capturedAt, nextReset, usage30d };
+  return { balance: null, basis: allowance === null ? 'Make did not report the plan allowance. Enter credits per cycle in Alerts, Billing inputs' : 'Make did not report the last reset date',
+    asOf: null, nextReset, usage30d };
+}
+
+// Netlify has no credit balance API. Uses the snapshot entered in Alerts, Billing inputs, then env.
+export function netlifyCreditBalance(env, today, billing = {}) {
+  const fromUi = billing.netlifyCreditsRemaining != null;
+  const balance = fromUi ? number(billing.netlifyCreditsRemaining) : number(env.NETLIFY_CREDITS_REMAINING);
+  const asOf = day(fromUi ? billing.netlifyCreditsAsOf : env.NETLIFY_CREDITS_AS_OF);
+  if (balance === null || !asOf || asOf > today) return { balance: null, asOf: null, basis: 'Netlify has no credit API. Enter the balance in Alerts, Billing inputs' };
+  const age = Math.round((Date.parse(today) - Date.parse(asOf)) / 86400000);
+  return { balance, asOf, ageDays: age, monthly: number(billing.netlifyMonthlyCredits), basis: 'Snapshot from the Netlify billing page' + (age ? ', ' + age + ' day' + (age === 1 ? '' : 's') + ' old' : '') };
 }
 
 // Short, rule-based signals for the HQ overview and the model. tone: good, watch, act.
