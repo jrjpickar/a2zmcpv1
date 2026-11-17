@@ -1,9 +1,9 @@
-const stations = [
+export const stations = [
   { key: 'leads', x: -4.5, z: -3.6, color: '#7bad9a' },
   { key: 'proposals', x: -0.9, z: -4.7, color: '#9bb4c5' },
   { key: 'wins', x: 3.7, z: -4.1, color: '#cfad74' },
   { key: 'labor', x: 5.5, z: -0.8, color: '#dc8c60' },
-  { key: 'containers', x: 3.9, z: 3.9, color: '#bd9968' },
+  { key: 'pipelines', x: 3.9, z: 3.9, color: '#c9a2d6' },
   { key: 'workforce', x: 0, z: 5.15, color: '#8da18a' },
   { key: 'runway', x: -3.8, z: 3.55, color: '#8bac98' },
   { key: 'system', x: -5.7, z: .1, color: '#b5ac94' },

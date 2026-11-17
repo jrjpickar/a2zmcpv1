@@ -23,25 +23,36 @@ export async function exportFeed(env, name, keys, signal) {
   return data;
 }
 
-export async function containerSales(env, signal) {
+export const containerPipelineId = env => env.CONTAINER_PIPELINE_ID || 'F8i8hB7E5xHrJbJUXFr4';
+
+async function pipelineNames(location, headers, signal) {
+  try {
+    const data = await readJson('https://services.leadconnectorhq.com/opportunities/pipelines?locationId=' + encodeURIComponent(location), { headers, signal });
+    return Array.isArray(data?.pipelines) ? data.pipelines.filter(p => p?.id).map(p => ({ id: p.id, name: String(p.name || '').trim() })) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Won opportunities across every pipeline in the location, with pipeline names.
+export async function wonSales(env, signal) {
   const token = required(env, 'GHL_PIT_TOKEN');
-  const params = new URLSearchParams({
-    location_id: env.GHL_LOCATION_ID || 'QUcu2PEAxPV1sQm1GQCq',
-    pipeline_id: env.CONTAINER_PIPELINE_ID || 'F8i8hB7E5xHrJbJUXFr4',
-    status: 'won', limit: '100',
-  });
+  const location = env.GHL_LOCATION_ID || 'QUcu2PEAxPV1sQm1GQCq';
+  const headers = { Authorization: 'Bearer ' + token, Version: '2021-07-28', Accept: 'application/json' };
+  const params = new URLSearchParams({ location_id: location, status: 'won', limit: '100' });
+  const names = pipelineNames(location, headers, signal);
   const rows = new Map();
   const cursors = new Set();
   for (let page = 0; page < 100; page++) {
-    const data = await readJson('https://services.leadconnectorhq.com/opportunities/search?' + params, {
-      headers: { Authorization: 'Bearer ' + token, Version: '2021-07-28', Accept: 'application/json' }, signal,
-    });
+    const data = await readJson('https://services.leadconnectorhq.com/opportunities/search?' + params, { headers, signal });
     if (!Array.isArray(data?.opportunities) || data.opportunities.some(row => !row.id)) throw new Error('Invalid opportunities');
     for (const row of data.opportunities) rows.set(row.id, {
-      id: row.id, status: row.status, at: row.lastStatusChangeAt, value: number(row.monetaryValue),
+      id: row.id, name: String(row.name || row.contact?.name || '').trim() || null, pipelineId: row.pipelineId || null, status: row.status, at: row.lastStatusChangeAt, value: number(row.monetaryValue),
     });
     const { meta, opportunities } = data;
-    if (rows.size === meta?.total || (opportunities.length < 100 && !Number.isFinite(meta?.total))) return [...rows.values()];
+    if (rows.size === meta?.total || (opportunities.length < 100 && !Number.isFinite(meta?.total))) {
+      return { pipelines: await names, opportunities: [...rows.values()] };
+    }
     const cursor = meta?.startAfterId;
     if (!cursor || meta.startAfter == null || cursors.has(cursor)) throw new Error('Incomplete opportunity pagination');
     cursors.add(cursor);

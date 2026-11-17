@@ -3,6 +3,19 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
-  "scripts": { "test": "node --test", "build": "node --test" }
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "build": "node --test",
+    "build:city": "node scripts/build-city.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "three": "^0.187.0"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.7.13"
+  }
 }

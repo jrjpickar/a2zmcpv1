@@ -4,7 +4,7 @@ import { report } from './lib/report.mjs';
 const protocols = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const tool = {
   name: 'a2z_operating_report',
-  description: 'Read A2Z leads, proposals, jobs won, labor and container sales, workforce, runway and system health.',
+  description: 'Read A2Z leads, proposals, jobs won, labor and container sales, won sales by pipeline, workforce, runway and system health.',
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   inputSchema: { type: 'object', properties: {
     preset: { type: 'string', enum: ['today', 'wtd', 'mtd', '30d', 'ytd'] },

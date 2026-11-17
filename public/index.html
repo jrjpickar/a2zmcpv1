@@ -7,39 +7,58 @@
   <meta name="theme-color" content="#101311">
   <title>A2Z Operations</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/city3d.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header class="shell masthead">
+  <header class="masthead">
     <div class="mark" aria-label="A2Z">A<span>2</span>Z</div>
     <div class="identity"><strong>Operations</strong><span>A2Z Construction Services</span></div>
+    <nav class="views" aria-label="Views">
+      <a href="#city" id="nav-city" aria-current="page">City</a>
+      <a href="#settings" id="nav-settings">Alerts <span id="alert-count" class="count" hidden></span></a>
+    </nav>
+    <p id="status" class="pill" role="status">Connecting…</p>
     <form id="controls">
       <label for="range" class="sr-only">Reporting period</label>
       <select id="range"><option value="today">Today</option><option value="wtd">This week</option><option value="mtd" selected>This month</option><option value="30d">Last 30 days</option><option value="ytd">This year</option></select>
       <button id="refresh" type="submit">Refresh</button>
     </form>
   </header>
-  <main class="shell">
-    <div class="heading"><h1>Command center</h1><p id="status" role="status">Connecting…</p></div>
-    <section id="auth" class="surface access" hidden>
-      <form id="signin"><label for="key">Dashboard access key</label><input id="key" type="password" autocomplete="current-password" required><button type="submit">Unlock</button></form>
-    </section>
-    <div id="dashboard" hidden>
-      <div id="tiles" aria-label="Key metrics"></div>
-      <div class="workspace">
-        <section class="surface scene" aria-labelledby="scene-title">
-          <div class="scene-heading"><h2 id="scene-title">Operations map</h2><button type="button" id="reset">Reset view</button></div>
-          <div id="map">
-            <canvas id="city" aria-hidden="true"></canvas>
-            <div id="stations" aria-label="Select a metric on the operations map"></div>
-          </div>
-        </section>
-        <aside class="surface detail" aria-labelledby="detail-title">
-          <h2 id="detail-title">System health</h2>
-          <div id="detail-content"></div>
-        </aside>
+  <section id="auth" class="surface access" hidden>
+    <form id="signin"><label for="key">Dashboard access key</label><input id="key" type="password" autocomplete="current-password" required><button type="submit">Unlock</button></form>
+  </section>
+  <main id="dashboard" hidden>
+    <section id="brain" class="brain" aria-label="Operations city">
+      <div id="map">
+        <canvas id="city" aria-hidden="true"></canvas>
+        <div id="stations" aria-label="Select a metric on the operations map"></div>
       </div>
-    </div>
+      <p class="hint">Drag to turn. Click a building, or any worker in the crew.</p>
+      <button type="button" id="reset" class="float">Reset view</button>
+      <aside id="detail" class="detail" aria-labelledby="detail-title" hidden>
+        <button type="button" id="close" class="close" aria-label="Close">×</button>
+        <h2 id="detail-title"></h2>
+        <div id="detail-content"></div>
+      </aside>
+    </section>
+    <section id="settings" class="settings" aria-labelledby="settings-title" hidden>
+      <div class="settings-head">
+        <div><h1 id="settings-title">Alert settings</h1><p class="muted">Each enabled rule is checked every 15 minutes. A rule that triggers posts to the webhook once, then waits out the cooldown.</p></div>
+      </div>
+      <form id="alert-form" class="surface webhook">
+        <label class="field wide"><span>Webhook URL</span><input id="webhook" type="url" required placeholder="https://hook.us2.make.com/..."></label>
+        <label class="field"><span>Cooldown (minutes)</span><input id="cooldown" type="number" min="15" max="10080" step="1" required></label>
+        <label class="switch"><input id="alerts-on" type="checkbox"><span>Alerts on</span></label>
+        <div class="actions">
+          <button type="submit" id="save" class="primary">Save</button>
+          <button type="button" id="test">Send test</button>
+          <button type="button" id="check">Check now</button>
+        </div>
+        <p id="alert-status" class="muted" role="status"></p>
+      </form>
+      <div id="rules"></div>
+    </section>
   </main>
 </body>
 </html>
