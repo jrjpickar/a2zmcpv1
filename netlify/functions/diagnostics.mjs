@@ -1,11 +1,14 @@
-import { authorized, json } from './lib/http.mjs';
+import { dashboardAccess } from './lib/dashboard-auth.mjs';
+import { json } from './lib/http.mjs';
 import { diagnostics } from './lib/report.mjs';
 import { alertStore, lastRun, loadSettings } from './lib/alerts.mjs';
 
 // GET /api/diagnostics[?fresh=1]. Needs the dashboard key. Shows status, timing and record counts, never secret values.
 export default async (request, { store = alertStore(), fetchImpl = fetch } = {}) => {
   if (request.method !== 'GET') return json({ error: 'GET required' }, 405, { Allow: 'GET' });
-  if (!authorized(request, process.env.DASHBOARD_KEY, 'x-a2z-key')) return json({ error: 'Dashboard key required' }, 401);
+  const access = dashboardAccess(request);
+  if (!access) return json({ error: 'Dashboard key required' }, 401);
+  if (!access.admin) return json({ error: 'Administrator access required' }, 403);
   try {
     const fresh = new URL(request.url).searchParams.get('fresh') === '1';
     const result = await diagnostics({ fresh, fetchImpl });

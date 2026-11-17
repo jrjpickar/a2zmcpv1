@@ -7,6 +7,7 @@ export const stations = [
   { key: 'workforce', x: 0, z: 5.15, color: '#8da18a' },
   { key: 'runway', x: -3.8, z: 3.55, color: '#8bac98' },
   { key: 'system', x: -5.7, z: .1, color: '#b5ac94' },
+  { key: 'mail', x: -6, z: 2.4, color: '#e8aa79' },
 ];
 
 export function setupMap(canvas, labels, select) {
@@ -65,7 +66,8 @@ export function setupMap(canvas, labels, select) {
     for (const { x, z, color } of stations) {
       polygon([[0,0,0], [x,0,z], [x+.09,0,z+.1], [.09,0,.1]], color + 'b3');
     }
-    const structures = [...stations, { x: 0, z: 0, color: '#edb475', key: 'core' }]
+    const visibleStations = stations.filter(station => station.key !== 'mail' || tiles.some(tile => tile.key === 'mail'));
+    const structures = [...visibleStations, { x: 0, z: 0, color: '#edb475', key: 'core' }]
       .sort((a, b) => depth(a.x, a.z) - depth(b.x, b.z));
     const labelPositions = [];
     for (const { key, x, z, color } of structures) {
@@ -73,7 +75,14 @@ export function setupMap(canvas, labels, select) {
       const tile = tiles.find(item => item.key === key);
       const tall = core ? 2.35 : tile?.value === '—' ? .35 : 1.5;
       block(x, z, core ? 1.28 : .85, .19, '#455246');
-      block(x, z, core ? .83 : .53, tall, color);
+      if (key === 'mail') {
+        for (let i = 0; i < 5; i++) {
+          const y = .27 + i * .19;
+          const offset = i % 2 ? .10 : -.10;
+          polygon([[x-.68+offset,y,z-.43], [x+.68+offset,y,z-.43], [x+.68+offset,y,z+.43], [x-.68+offset,y,z+.43]], i % 2 ? '#efcfaa' : '#f9e8cf', '#a37756');
+        }
+        polygon([[x-.68-.10,1.03,z-.43], [x-.10,1.03,z+.16], [x+.68-.10,1.03,z-.43]], color, '#a37756');
+      } else block(x, z, core ? .83 : .53, tall, color);
       if (core) {
         polygon([[-.83,tall,-.83], [.83,tall,-.83], [0,tall+1.05,0]], '#ffe2af');
         polygon([[.83,tall,.83], [-.83,tall,.83], [0,tall+1.05,0]], '#d99350');
@@ -111,8 +120,10 @@ export function setupMap(canvas, labels, select) {
   return {
     update(next, selected) {
       tiles = next;
+      buttons.get('mail').hidden = !tiles.some(tile => tile.key === 'mail');
       for (const { key, short } of tiles) {
         const button = buttons.get(key);
+        if (!button) continue;
         button.textContent = short;
         button.setAttribute('aria-pressed', String(key === selected));
       }

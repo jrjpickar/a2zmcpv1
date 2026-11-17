@@ -1,6 +1,9 @@
 // One Groq chat completion over aggregate metrics. No crew names, phones or contact data are sent.
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 export const DEFAULT_MODEL = 'openai/gpt-oss-120b';
+export function groqReasoningOptions(model) {
+  return /^openai\/gpt-oss-(?:20b|120b)$/.test(model) ? { reasoning_effort: 'low', include_reasoning: false } : {};
+}
 
 export function compact(r, alerts = []) {
   const { crew, bench, ...workforce } = r.kpis.workforce || {};
@@ -43,7 +46,7 @@ export async function ask({ question, result, alerts = [], env = process.env, fe
     method: 'POST', signal: AbortSignal.timeout(25000),
     headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model, temperature: 0.2, reasoning_effort: 'low', include_reasoning: false,
+      model, temperature: 0.2, ...groqReasoningOptions(model),
       max_completion_tokens: Number(env.GROQ_MAX_TOKENS) || 900,
       messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: 'Metrics JSON:\n' + context + '\n\nQuestion: ' + q }],
     }),

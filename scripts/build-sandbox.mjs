@@ -3,6 +3,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { diagnostics, report } from '../netlify/functions/lib/report.mjs';
+import { mailSample } from '../netlify/functions/lib/mail.mjs';
 import { catalog, defaults } from '../netlify/functions/lib/alerts.mjs';
 
 const out = process.argv[2] || 'dist/sandbox.html';
@@ -37,14 +38,21 @@ const demo = [
   r => { const w = r.kpis.workforce, p = w.crew.pop(); if (p) { const { job, ...rest } = p; w.bench.push(rest); w.workers--; w.booked--; w.available++; } },
 ];
 let step = 0;
+let unread = 6;
 setInterval(() => {
   const change = demo[step++ % demo.length];
   Object.values(SAMPLE).forEach(change);
   document.getElementById('refresh')?.click();
 }, 9000);
-window.fetch = async (url, init = {}) => {
+const sandboxRequest = async (url, init = {}) => {
   await new Promise(r => setTimeout(r, 250));
-  const u = new URL(url, location.href);
+  const u = new URL(url, 'https://sandbox.invalid');
+  if (u.pathname === '/api/mail-summary') return reply(${JSON.stringify(mailSample)});
+  if (u.pathname === '/api/mail') return reply({
+    status: 'ok',
+    asOf: new Date().toISOString(),
+    stats: { unreadIncoming: unread++, bidInvitations: 2, urgentUnread: 1, awaitingReply: 5, unreadInvoiceMail: 2 },
+  });
   if (u.pathname === '/api/diagnostics') return reply({ ...HEALTH, generatedAt: new Date().toISOString(), fresh: u.searchParams.get('fresh') === '1' });
   if (u.pathname === '/api/ask') return reply({ error: 'Sandbox preview: Groq runs on the deployed site with GROQ_API_KEY. The signals above are live from the sample data.' }, 503);
   if (u.pathname === '/api/alerts') {
@@ -59,8 +67,11 @@ const page = html.replace('<!doctype html>', '<!DOCTYPE html>')
   .replace('<title>A2Z Operations</title>', '<title>A2Z Operations Sandbox</title>')
   .replace('<link rel="stylesheet" href="/styles.css">', () => '<style>' + css + '</style>')
   .replace('<script src="/city3d.js"></script>', () => '<script>' + safe(city) + '</script>')
+  .replace('<p id="status"', '<button type="button" id="demo-mail">Simulate delivery</button><p id="status"')
   .replace('<script type="module" src="/app.js"></script>', '')
-  .replace('</body>', () => '<script type="module">' + safe(stub + '\n' + map.replace(/^export /gm, '') + '\n' + app.replace(/^import .*\n/m, '')) + '</script>\n</body>');
+  .replace('</body>', () => '<script type="module">' + safe(stub + '\n' + map.replace(/^export /gm, '') + '\n' + app.replace(/^import .*\n/m, '').replace(/\bfetch\(/g, 'sandboxRequest(')
+      .replace('refresh().then(route);', "refresh().then(() => { route(); select('mail'); });")
+      + "\ndocument.getElementById('demo-mail').addEventListener('click', () => { select('mail'); updateMail(); });" ) + '</script>\n</body>');
 await mkdir(dirname(out), { recursive: true });
 await writeFile(out, page);
 console.log('Wrote ' + out + ' (' + Math.round(page.length / 1024) + ' KB)');

@@ -236,3 +236,5 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
   #controls { gap: 3px; }
   #controls > * { padding-inline: 5px; }
 }
+
+.mail-summary { white-space: pre-wrap; overflow-wrap: anywhere; }

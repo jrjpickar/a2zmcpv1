@@ -23,6 +23,57 @@ Set runtime variables in each site's Netlify settings. Generate distinct, random
 | Accounting Ledger | `BANK_CONNECTIONS_JSON` and, for Plaid, `PLAID_CLIENT_ID`, `PLAID_SECRET`, optional `PLAID_ENV` | Read-only bank balance connections. See the configuration below |
 | A2Z Operations | Optional `MONTHLY_CASH_BURN_USD` | The fallback burn uses the preceding 90 full days of recorded Ledger bill payments divided by three. It can omit payroll, debt or other outflows recorded elsewhere and excludes collections |
 
+### Mail district
+
+Set `MCP_COMMAND_CENTER_TOKEN` in **A2Z Operations → Netlify environment variables**, scoped to **Functions**. Use the same generated token as the A2Z Email Inbox site. Operations sends it server-side to `GET https://a2zemails.netlify.app/api/mcp/command-center` as a bearer token. Redeploy Operations after setting it.
+
+The Mail district shows recent statistics for the single mailbox configured on the email site. It uses the dashboard's existing access key, so use a mailbox whose counts all dashboard key holders may see. The district links to the email app, where users sign in to read their own mail. Sample mode uses fixture counts and never calls the email site.
+
+On a visible dashboard, Mail checks every 30 seconds. The first successful check sets the baseline. Later increases send up to five envelopes into the stack. Add `arrivalSequence` to the existing stats response to animate actual deliveries. This must be a durable, monotonically increasing integer for the configured mailbox, incremented once per new incoming delivery irrespective of read state. Keep it stable across polling, deploys and folder changes. Until it is present, the animation follows net increases in unread incoming mail.
+
+**Summarize mailbox** uses `GROQ_API_KEY` and the optional existing `GROQ_MODEL`. On request, the server sends subjects and up to 2,000 UTF-8 bytes of plain text per message to Groq. It displays the result page by page for the whole mailbox. Attachments are excluded. The dashboard's current access key also grants access to summaries, so use a mailbox whose contents all key holders are authorized to see.
+
+Extend the email app's existing bearer-protected endpoint as follows:
+
+- `GET /api/mcp/command-center` keeps its existing `stats`, `asOf` and `coverage` fields. Add `arrivalSequence` as described above.
+- `GET /api/mcp/command-center?view=messages&limit=5` returns the first page of the configured mailbox. Honor the requested limit. Include all read and unread messages across the folders the email app exposes for this integration, without duplicates. Use a stable ordering and an opaque cursor that continues the same traversal even when new mail arrives.
+- `GET /api/mcp/command-center?view=messages&limit=5&cursor=…` returns the next page. Return `nextCursor: null` on the last page. Continue enforcing the same bearer token and mailbox allowlist. Send plain text only.
+
+```json
+{
+  "messages": [
+    { "id": "stable-id", "subject": "Crew confirmation", "text": "Please confirm six workers.", "receivedAt": "2026-11-17T20:00:00Z" }
+  ],
+  "nextCursor": null
+}
+```
+
+Run `npm run build:city` followed by `node scripts/build-sandbox.mjs` to preview the district and sample summaries locally.
+
+### HighLevel Marketplace
+
+Use a **Private** Marketplace app targeting a **Sub-account**. This deployment serves one A2Z company and location and uses the existing Operations data integrations. The Custom Page uses [HighLevel's embedded user context](https://marketplace.gohighlevel.com/docs/other/user-context-marketplace-apps/index.html) to sign staff in individually.
+
+1. Add a **Custom Page** named **A2Z Operations** with URL `https://<operations-domain>/?highlevel=1`. Open it from the actual HighLevel sub-account menu for sign-in. The supported frame origins are `https://app.gohighlevel.com` and `https://app.leadconnectorhq.com`. For a white-label console, add its exact HTTPS origin in both `netlify.toml` and `public/app.js`.
+2. Add `https://<operations-domain>/api/highlevel/install` as the exact **OAuth redirect URI**. Generate a client key pair and the app's **Shared Secret** in Advanced Settings. Keep the scope selection minimal. If the installer requires a scope, `locations.readonly` is sufficient for this private deployment's installation configuration. Operations uses its existing credentials for CRM data.
+3. Set these variables in **Operations Netlify → Functions**, then redeploy:
+
+| Variable | Value |
+| --- | --- |
+| `GHL_APP_SHARED_SECRET` | Marketplace app Shared Secret |
+| `GHL_SESSION_SECRET` | Separate random secret, generated with `openssl rand -hex 32` |
+| `GHL_MARKETPLACE_CLIENT_ID`, `GHL_MARKETPLACE_CLIENT_SECRET` | Marketplace app client key pair |
+| `GHL_MARKETPLACE_INSTALL_URL` | The standard OAuth authorize URL from Advanced Settings, including the registered redirect URI |
+| `GHL_MARKETPLACE_COMPANY_ID`, `GHL_LOCATION_ID` | The intended agency and existing Operations location |
+| `GHL_MARKETPLACE_ALLOWED_USERS` | Comma-separated HighLevel user IDs approved to view Operations data |
+| `GHL_MARKETPLACE_MAIL_USERS` | Approved user IDs who may also access the configured mailbox and AI summaries |
+| `GHL_MARKETPLACE_ADMIN_USERS` | Approved user IDs who may also access alert settings and diagnostics |
+
+4. As the HighLevel installer, open `https://<operations-domain>/api/highlevel/install` in a top-level tab and select the configured sub-account. Operations adds OAuth state and verifies the location during the callback. Netlify Blobs makes each install attempt single use. The exchanged OAuth credentials are discarded after verification because Operations already has separate source credentials.
+5. Open the Custom Page as a listed user. Check that an Operations-only user can see the city and that a user explicitly listed for Mail can also see the Mail district. Use a test mailbox while checking the Groq summary. The Diagnostics page's live connection check verifies Groq model access. **Summarize mailbox** exercises actual inference once the email app exposes the message feed.
+
+The session lasts 15 minutes and renews from the HighLevel parent. A user's permissions are checked on every protected request. This is the private staff installation. Only explicitly listed Mail users can read the shared mailbox summaries. External IONOS users and per-user mailbox routing need their own connection and permissions.
+
 Enter credit snapshot dates as `YYYY-MM-DD`. Update them when reconciling. Demo mode is enabled only by `DATA_MODE=sample` and serves synthetic figures. Leave this variable unset in production.
 
 ## Live cash balance

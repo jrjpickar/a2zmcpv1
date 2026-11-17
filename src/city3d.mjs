@@ -11,7 +11,7 @@ const C = {
 const COLORS = {
   hq: 0xffa940,
   leads: 0x35d0ba, proposals: 0x5aa9ff, wins: 0xffc531, labor: 0xff7a45,
-  pipelines: 0xb57bff, workforce: 0xffd23f, runway: 0x3ee07f, system: 0x9fb4ff,
+  pipelines: 0xb57bff, workforce: 0xffd23f, runway: 0x3ee07f, system: 0x9fb4ff, mail: 0xe8aa79,
 };
 const HATS = [0xffd23f, 0xff7a1a, 0xffffff, 0x3fa9ff, 0xff4d8d, 0x46e08a];
 const tone = s => ({ ok: C.ok, ready: C.ok, setup: C.warn, building: C.warn, enqueued: C.warn, processing: C.warn }[s] || C.bad);
@@ -27,10 +27,13 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 let seed = 11;
 const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
 
-// Eight districts on a ring around A2Z HQ.
+// Districts on a ring around A2Z HQ.
 const R = 14.5;
-const SPOTS = Object.fromEntries(['proposals', 'wins', 'pipelines', 'labor', 'workforce', 'runway', 'system', 'leads']
-  .map((k, i) => [k, [Math.round(Math.sin(Math.PI - i * Math.PI / 4) * R * 10) / 10, Math.round(Math.cos(Math.PI - i * Math.PI / 4) * R * 10) / 10]]));
+const DISTRICTS = ['proposals', 'wins', 'pipelines', 'labor', 'mail', 'workforce', 'runway', 'system', 'leads'];
+const SPOTS = Object.fromEntries(DISTRICTS.map((key, index) => {
+  const angle = Math.PI - index * 2 * Math.PI / DISTRICTS.length;
+  return [key, [Math.sin(angle) * R, Math.cos(angle) * R]];
+}));
 const HOME = new THREE.Vector3(0, 1.5, 0);
 
 let S = null;
@@ -76,6 +79,10 @@ export function mount(container, opts = {}) {
     hovered: null, selected: null, worker: null, raycaster: new THREE.Raycaster(), pointer: new THREE.Vector2(), t0: performance.now(), focus: null, frame: 0 };
   scenery(scene);
   S.traffic = new THREE.Group(); scene.add(S.traffic); S.cars = []; S.crewPos = new Map();
+  S.mailFlights = new THREE.Group();
+  S.mailArrivals = [];
+  S.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  scene.add(S.mailFlights);
   resize();
   S.ro = new ResizeObserver(resize); S.ro.observe(container);
   const el = renderer.domElement;
@@ -88,7 +95,7 @@ export function mount(container, opts = {}) {
     if (hit) S.opts.onSelect?.(hit.key, hit.worker);
   });
   loop();
-  return { update, select, reset, unmount, drive };
+  return { update, select, reset, unmount, drive, deliverMail };
 }
 
 export function unmount() {
@@ -165,6 +172,7 @@ function update(report, tiles, palette = [], alerts = []) {
   workforce(city, report.kpis.workforce, tile.workforce);
   runway(city, report.kpis.runway, tile.runway);
   system(city, report.system, tile.system);
+  if (tile.mail) mailDistrict(city, tile.mail);
   flows(city, report);
   S.scene.add(city);
   highlight();
@@ -588,6 +596,72 @@ function fan(size, frame) {
   rotor.add(new THREE.Mesh(new THREE.CylinderGeometry(size * 0.1, size * 0.1, 0.06, 16), mat(0x2a2f44)).rotateX(Math.PI / 2));
   return { g, ring, rotor };
 }
+function envelope(color) {
+  const letter = new THREE.Group();
+  letter.add(box(4.15, 0.24, 2.75, mat(color)));
+  const flap = new THREE.BufferGeometry();
+  flap.setAttribute('position', new THREE.Float32BufferAttribute([
+    -2.06, 0.132, -1.36, 0, 0.132, 0.58, 2.06, 0.132, -1.36,
+  ], 3));
+  flap.computeVertexNormals();
+  letter.add(new THREE.Mesh(flap, mat(0xd4b08c)));
+  const seam = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-2.05, 0.139, -1.35),
+    new THREE.Vector3(0, 0.139, 0.58),
+    new THREE.Vector3(2.05, 0.139, -1.35),
+  ]);
+  letter.add(new THREE.Line(seam, new THREE.LineBasicMaterial({ color: 0x8b624e })));
+  letter.add(at(box(0.48, 0.02, 0.38, mat(0xd37c61)), 1.58, 0.14, -0.94));
+  return letter;
+}
+
+const MAIL_PAPER = [0xf8ebd2, 0xeed1a9, 0xf9ead5, 0xeac4a8, 0xffefd9];
+const MAIL_TOP = 2.11;
+
+function mailDistrict(city, tile) {
+  const g = district(city, 'mail', 0x352744);
+  g.add(at(box(5.7, 0.16, 4.8, mat(0x584963)), 0, 0.20, 0));
+  for (const [index, paper] of MAIL_PAPER.entries()) {
+    const letter = envelope(paper);
+    letter.position.set(index % 2 ? 0.23 : -0.20, 0.43 + index * 0.31, 0);
+    letter.rotation.y = index % 2 ? 0.13 : -0.18;
+    g.add(letter);
+  }
+  label('mail', world(g, 0, 2.65, 0), tile?.short || 'Mail', null, false);
+  if (tile?.value) label('mail', world(g, 0, 3.52, 0), 'Inbox', tile.value, true);
+}
+
+function deliverMail(count) {
+  if (!S || S.reduceMotion.matches || !S.container.offsetParent || document.hidden) return;
+  const flights = Math.min(count, 5, 5 - S.mailArrivals.length);
+  for (let index = 0; index < flights; index++) {
+    const letter = envelope(MAIL_PAPER[index]);
+    letter.visible = false;
+    S.mailFlights.add(letter);
+    S.mailArrivals.push({ letter, starts: now() + index * 0.28 });
+  }
+}
+
+function animateMail(time) {
+  const [x, z] = SPOTS.mail;
+  S.mailArrivals = S.mailArrivals.filter(({ letter, starts }) => {
+    const progress = (time - starts) / 1.35;
+    if (progress < 0) return true;
+    if (progress >= 1) {
+      letter.removeFromParent();
+      letter.traverse(dispose);
+      return false;
+    }
+    const ease = 1 - Math.pow(1 - progress, 2);
+    letter.visible = true;
+    letter.position.set(x + 5 * (1 - ease), MAIL_TOP + 8 * (1 - ease) + Math.sin(progress * Math.PI) * 2, z - 4 * (1 - ease));
+    letter.rotation.set(-0.65 * (1 - ease), -0.18 + 2.9 * (1 - ease), 0.45 * (1 - ease));
+    // The delivered envelope joins the stack instead of sitting on top of it.
+    letter.scale.setScalar(progress > 0.92 ? Math.max(0.01, (1 - progress) / 0.08) : 1);
+    return true;
+  });
+}
+
 function system(city, sys, tile) {
   const g = district(city, 'system', 0x262a48);
   const deploys = Object.entries(sys.deploys).map(([n, d]) => d.state === 'ready' ? 'ok' : d.status === 'setup' ? 'setup' : 'bad');
@@ -745,6 +819,7 @@ function loop() {
   S.controls.update();
   for (const f of S.anim) f(t);
   traffic(t);
+  animateMail(t);
   S.renderer.render(S.scene, S.camera);
   const w = S.container.clientWidth, h = S.container.clientHeight;
   for (const l of S.labelList) {

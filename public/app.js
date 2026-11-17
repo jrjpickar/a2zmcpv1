@@ -9,18 +9,71 @@ const whole = value => value == null ? '-' : Math.abs(value) >= 1000
 const plural = (count, word) => number(count) + ' ' + word + (count === 1 ? '' : 's');
 const colors = Object.fromEntries(stations.map(s => [s.key, s.color]));
 const palette = ['#e6b072', '#7bad9a', '#9bb4c5', '#c9a2d6', '#dc8c60', '#cfc27a', '#8da18a', '#d98aa0'];
-let key = sessionStorage.getItem('a2z-key') || '';
+const highlevelMode = new URLSearchParams(location.search).get('highlevel') === '1';
+const highlevelOrigins = ['https://app.gohighlevel.com', 'https://app.leadconnectorhq.com'];
+let highlevelSession;
+let signingIn;
+let key = highlevelMode ? '' : sessionStorage.getItem('a2z-key') || '';
 const fragment = new URLSearchParams(location.hash.slice(1));
-if (fragment.has('key')) {
+if (!highlevelMode && fragment.has('key')) {
   key = fragment.get('key');
   sessionStorage.setItem('a2z-key', key);
   history.replaceState(null, '', location.pathname + location.search);
 }
+function authHeaders(extra = {}) {
+  const credentials = highlevelMode ? { 'x-a2z-session': highlevelSession?.token || '' } : { 'x-a2z-key': key };
+  return { ...credentials, ...extra };
+}
+
+function highlevelContext() {
+  if (window.parent === window) throw new Error('Open A2Z Operations from its HighLevel Custom Page.');
+  return new Promise((resolve, reject) => {
+    const finish = (callback, value) => {
+      clearTimeout(timer);
+      removeEventListener('message', onMessage);
+      callback(value);
+    };
+    const onMessage = event => {
+      if (event.source !== window.parent || !highlevelOrigins.includes(event.origin) ||
+          event.data?.message !== 'REQUEST_USER_DATA_RESPONSE' || typeof event.data.payload !== 'string') return;
+      finish(resolve, event.data.payload);
+    };
+    const timer = setTimeout(() => finish(reject, new Error('HighLevel did not return a sign-in session.')), 6500);
+    addEventListener('message', onMessage);
+    for (const origin of highlevelOrigins) window.parent.postMessage({ message: 'REQUEST_USER_DATA' }, origin);
+  });
+}
+
+async function signInHighLevel() {
+  if (highlevelSession?.expires * 1000 > Date.now() + 60000) return;
+  if (signingIn) return signingIn;
+  signingIn = (async () => {
+    const encryptedData = await highlevelContext();
+    const response = await fetch('/api/highlevel/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ encryptedData }), signal: AbortSignal.timeout(9000),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'HighLevel sign-in failed.');
+    highlevelSession = result;
+  })();
+  try {
+    await signingIn;
+  } finally {
+    signingIn = null;
+  }
+}
+
 let report;
 let selected = null;
 let alertView = null;
 let worker = null;
 let pending;
+let mail = { status: 'loading' };
+let previousUnread = null;
+let previousArrival = null;
+let digest = { sections: [], count: 0, cursor: null };
+let mailRequest;
 const map = window.A2ZCity?.supported() ? city3d() : setupMap($('city'), $('stations'), id => select(id, true));
 
 function city3d() {
@@ -28,7 +81,7 @@ function city3d() {
   $('stations').hidden = true;
   $('map').classList.add('live');
   const view = window.A2ZCity.mount($('map'), { onSelect: (id, index) => select(id, false, index ?? null) });
-  return { update: (values, id) => { view.update(report, values, palette, alertDistricts()); view.select(id, worker, false); }, reset: view.reset, select: view.select };
+  return { update: (values, id) => { view.update(report, values, palette, alertDistricts()); view.select(id, worker, false); }, reset: view.reset, select: view.select, deliverMail: view.deliverMail };
 }
 
 function tiles() {
@@ -52,6 +105,9 @@ function tiles() {
       sub: kpis.workforce ? plural(kpis.workforce.jobs, 'job') + ' today' : 'Dispatch' },
     { key: 'runway', title: 'Financial runway', short: 'Runway', value: kpis.runway.months == null ? '-' : number(kpis.runway.months) + ' mo',
       sub: kpis.runway.cash == null ? 'Cash feed needed' : whole(kpis.runway.cash) + ' cash' },
+    ...(report.access?.mailbox === false ? [] : [
+      { key: 'mail', title: 'Mail', short: 'Mail', value: mail.stats ? plural(mail.stats.unreadIncoming, 'unread message') : '', sub: 'A2Z Email Inbox' },
+    ]),
     { key: 'hq', title: 'A2Z HQ', short: 'HQ', value: '', sub: '' },
     { key: 'system', title: 'System health', short: 'Systems', value: checked ? ready + ' / ' + deploys.length + ' live' : '-',
       sub: sources.filter(x => x.status === 'ok').length + ' / ' + sources.length + ' feeds connected' },
@@ -148,7 +204,7 @@ async function runAsk(out, question, button, stamp) {
   if (button) button.disabled = true;
   let data;
   try {
-    const response = await fetch('/api/ask', { method: 'POST', headers: { 'x-a2z-key': key, 'Content-Type': 'application/json' },
+    const response = await fetch('/api/ask', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ question, preset: $('range').value }) });
     data = await response.json().catch(() => ({ error: 'Ask unavailable' }));
     if (!response.ok) data = { error: data.error || 'Ask unavailable' };
@@ -203,6 +259,7 @@ function details(tile) {
     panel.append(box);
   }
   if (tile.key === 'hq') return hqPanel(panel);
+  if (tile.key === 'mail') return mailPanel(panel);
   if (tile.key === 'system') {
     const deployRows = Object.entries(system.deploys).map(([name, deploy]) => [
       name, badge(deploy.state || deploy.status, deploy.state || (deploy.status === 'setup' ? 'Setup needed' : 'Unavailable')),
@@ -285,6 +342,133 @@ function details(tile) {
   }
 }
 
+function mailPanel(panel) {
+  const states = {
+    loading: 'Checking the mailbox…',
+    setup: 'Set MCP_COMMAND_CENTER_TOKEN in Netlify Functions to connect the mailbox.',
+    unavailable: 'The mailbox feed is temporarily unavailable.',
+  };
+  if (mail.status !== 'ok') panel.append(node('p', states[mail.status], 'muted'));
+  if (mail.stats) {
+    const stats = mail.stats;
+    panel.append(rows([
+      ['Unread incoming', number(stats.unreadIncoming)],
+      ['Bid invitations', number(stats.bidInvitations)],
+      ['Urgent unread', number(stats.urgentUnread)],
+      ['Awaiting reply', number(stats.awaitingReply)],
+      ['Unread invoice mail', number(stats.unreadInvoiceMail)],
+    ]));
+    panel.append(node('p', 'Recent mail · Last checked ' + new Date(mail.asOf).toLocaleTimeString(), 'muted'));
+  }
+  const link = node('a', 'Open A2Z Email Inbox');
+  link.href = 'https://a2zemails.netlify.app/';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  panel.append(link);
+  const button = node('button', digest.running ? 'Summarizing…' : digest.error && digest.cursor ? 'Resume summary' : 'Summarize mailbox');
+  button.type = 'button';
+  button.disabled = digest.running || (!mail.stats && !digest.error);
+  button.addEventListener('click', summarizeMailbox);
+  const controls = node('div', undefined, 'actions');
+  controls.append(button);
+  panel.append(controls);
+  const status = node('p', digest.error || digest.notice || (digest.count || digest.done ? plural(digest.count, 'message') + ' summarized' : ''), 'muted');
+  status.setAttribute('role', 'status');
+  panel.append(status);
+  for (const summary of digest.sections) panel.append(node('p', summary, 'mail-summary'));
+}
+
+function refreshMailPanel() {
+  if (selected === 'mail' && report) details(tiles().find(tile => tile.key === 'mail'));
+}
+
+async function summarizeMailbox() {
+  if (digest.running) return;
+  if (!digest.error || !digest.cursor) digest = { sections: [], count: 0, cursor: null };
+  const current = digest;
+  current.error = null;
+  current.running = true;
+  current.cursors ||= new Set();
+  refreshMailPanel();
+  try {
+    let retries = 0;
+    do {
+      const response = await fetch('/api/mail-summary', {
+        method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ cursor: current.cursor }),
+      });
+      if (digest !== current) return;
+      const page = await response.json();
+      if (digest !== current) return;
+      if (response.status === 429 && retries++ < 2) {
+        const seconds = Number(response.headers.get('Retry-After')) || 60;
+        current.notice = page.error;
+        refreshMailPanel();
+        await new Promise(resolve => setTimeout(resolve, seconds * 1000));
+        if (digest !== current) return;
+        current.notice = null;
+        continue;
+      }
+      if (!response.ok) throw new Error(page.error || 'Mailbox summary unavailable.');
+      retries = 0;
+      if (page.nextCursor && current.cursors.has(page.nextCursor)) throw new Error('The email app returned a repeated mailbox page.');
+      current.count += page.summarized;
+      if (page.summary) current.sections.push(page.summary);
+      current.cursor = page.nextCursor;
+      if (current.cursor) current.cursors.add(current.cursor);
+      refreshMailPanel();
+    } while (current.cursor || retries);
+    current.done = true;
+  } catch (error) {
+    current.error = error.message;
+  } finally {
+    current.running = false;
+    if (digest === current) refreshMailPanel();
+  }
+}
+
+async function updateMail() {
+  if (!report || report.access?.mailbox === false || document.hidden || $('dashboard').hidden || mailRequest) return;
+  const request = new AbortController();
+  mailRequest = request;
+  let next;
+  try {
+    const response = await fetch('/api/mail', {
+      headers: authHeaders(), signal: request.signal, cache: 'no-store',
+    });
+    next = response.ok ? await response.json() : { status: response.status === 403 ? 'denied' : 'unavailable' };
+  } catch {
+    next = { status: 'unavailable' };
+  } finally {
+    if (mailRequest === request) mailRequest = null;
+  }
+  if (request.signal.aborted) return;
+  if (next.status === 'denied') {
+    report.access = { ...report.access, mailbox: false };
+    mail = { status: 'loading' };
+    previousArrival = previousUnread = null;
+    digest = { sections: [], count: 0, cursor: null };
+    select(selected === 'mail' ? null : selected, true, worker);
+    return;
+  }
+  const unread = next.stats?.unreadIncoming;
+  const sequence = next.arrivalSequence;
+  const growth = previousUnread === null || unread == null ? 0 : unread - previousUnread;
+  const arrivals = Math.max(0, sequence == null ? growth : previousArrival === null ? 0 : sequence - previousArrival);
+  if (unread != null) previousUnread = unread;
+  if (sequence != null) previousArrival = sequence;
+  if (next.status === 'setup') { previousUnread = null; previousArrival = null; }
+  const updated = next.status === 'unavailable' ? { ...mail, status: next.status } : next;
+  const changed = mail.stats?.unreadIncoming !== updated.stats?.unreadIncoming;
+  mail = updated;
+  if (changed) map.update(tiles(), selected);
+  refreshMailPanel();
+  if (arrivals) map.deliverMail?.(arrivals);
+}
+
+setInterval(updateMail, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) updateMail(); });
+
 // fresh: new report data arrived, so rebuild the map.
 function select(id, fresh = false, index = null) {
   selected = id;
@@ -304,25 +488,47 @@ async function refresh() {
   $('status').textContent = 'Refreshing…';
   $('status').dataset.state = 'busy';
   try {
+    if (highlevelMode) await signInHighLevel();
+    if (current.signal.aborted) return;
     const response = await fetch('/api/metrics?preset=' + encodeURIComponent($('range').value), {
-      headers: { 'x-a2z-key': key }, signal: current.signal,
+      headers: authHeaders(), signal: current.signal,
     });
     if (current.signal.aborted) return;
     if (response.status === 401) {
       report = null;
+      mailRequest?.abort();
+      mailRequest = null;
+      mail = { status: 'loading' };
+      previousUnread = null;
+      previousArrival = null;
+      digest = { sections: [], count: 0, cursor: null };
       key = '';
-      sessionStorage.removeItem('a2z-key');
+      if (highlevelMode) highlevelSession = null;
+      else sessionStorage.removeItem('a2z-key');
       $('key').value = '';
       $('dashboard').hidden = true;
-      $('auth').hidden = false;
-      $('status').textContent = 'Access key required';
+      $('auth').hidden = highlevelMode;
+      $('status').textContent = highlevelMode ? 'HighLevel session expired. Select Refresh to sign in again.' : 'Access key required';
       $('status').dataset.state = 'error';
       return;
     }
     if (!response.ok) throw new Error('Report unavailable');
     const next = await response.json();
     if (current.signal.aborted) return;
+    const firstLoad = !report;
+    const hadMailbox = report?.access?.mailbox !== false;
     report = next;
+    if (report.access?.mailbox === false) {
+      mailRequest?.abort();
+      mail = { status: 'loading' };
+      previousArrival = previousUnread = null;
+      digest = { sections: [], count: 0, cursor: null };
+      if (selected === 'mail') selected = null;
+    }
+    if (highlevelMode) {
+      $('nav-settings').hidden = $('nav-health').hidden = report.access?.admin !== true;
+      if (report.access?.admin !== true && ($('settings').hidden === false || $('health').hidden === false)) route();
+    }
     $('auth').hidden = true;
     $('dashboard').hidden = false;
     const { mode, range } = report;
@@ -332,8 +538,14 @@ async function refresh() {
     alertBadge();
     select(selected, true, worker);
     lastLoad = Date.now();
-  } catch {
+    if (firstLoad || !hadMailbox) updateMail();
+  } catch (error) {
     if (!current.signal.aborted) {
+      if (highlevelMode && !highlevelSession) {
+        $('status').textContent = error.message || 'HighLevel sign-in failed.';
+        $('status').dataset.state = 'error';
+        return;
+      }
       $('status').textContent = report ? 'Refresh failed · showing ' + report.range.from + ' to ' + report.range.to : 'Report unavailable';
       $('status').dataset.state = 'error';
     }
@@ -373,7 +585,7 @@ function alertBadge() {
 }
 async function loadAlerts() {
   try {
-    const response = await fetch('/api/alerts', { headers: { 'x-a2z-key': key } });
+    const response = await fetch('/api/alerts', { headers: authHeaders() });
     if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Alerts unavailable');
     alertView = await response.json();
   } catch (error) {
@@ -451,7 +663,7 @@ function readSettings() {
 async function alertRequest(method, body, done) {
   $('alert-status').textContent = 'Working…';
   try {
-    const response = await fetch('/api/alerts', { method, headers: { 'x-a2z-key': key, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const response = await fetch('/api/alerts', { method, headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Request failed');
     $('alert-status').textContent = done(data);
@@ -471,7 +683,8 @@ $('check').addEventListener('click', () => alertRequest('POST', { action: 'check
   || (d.sent ? 'Sent ' + d.sent + ' new alert' + (d.sent === 1 ? '.' : 's.') : d.triggered ? d.triggered + ' triggered, all inside cooldown.' : 'Nothing triggered.')));
 
 function route() {
-  const view = location.hash === '#settings' ? 'settings' : location.hash === '#health' ? 'health' : 'city';
+  const canAdmin = !highlevelMode || report?.access?.admin === true;
+  const view = canAdmin && location.hash === '#settings' ? 'settings' : canAdmin && location.hash === '#health' ? 'health' : 'city';
   $('brain').hidden = view !== 'city';
   $('settings').hidden = view !== 'settings';
   $('health').hidden = view !== 'health';
@@ -490,7 +703,7 @@ async function loadHealth(fresh = false) {
   $('health-fresh').disabled = true;
   $('health-summary').textContent = fresh ? 'Reading every source fresh…' : 'Loading…';
   try {
-    const response = await fetch('/api/diagnostics' + (fresh ? '?fresh=1' : ''), { headers: { 'x-a2z-key': key } });
+    const response = await fetch('/api/diagnostics' + (fresh ? '?fresh=1' : ''), { headers: authHeaders() });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Diagnostics unavailable');
     renderHealth(data);

@@ -1,10 +1,13 @@
-import { authorized, json } from './lib/http.mjs';
+import { dashboardAccess } from './lib/dashboard-auth.mjs';
+import { json } from './lib/http.mjs';
 import { alertStore, evaluate, loadSettings, payload, post, runCheck, saveSettings } from './lib/alerts.mjs';
 
 // GET: settings, metric catalog and what is triggered now. PUT: save settings. POST: { action: 'test' | 'check' }.
 export default async (request, { store = alertStore(), fetchImpl = fetch } = {}) => {
   const env = process.env;
-  const keyed = authorized(request, env.DASHBOARD_KEY, 'x-a2z-key');
+  const access = dashboardAccess(request, env);
+  if (access && !access.admin) return json({ error: 'Administrator access required' }, 403);
+  const keyed = Boolean(access);
   if (!keyed && !(request.method === 'GET' && env.DATA_MODE === 'sample')) return json({ error: 'Dashboard key required' }, 401);
   try {
     if (request.method === 'GET') {
