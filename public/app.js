@@ -81,7 +81,7 @@ function city3d() {
   $('stations').hidden = true;
   $('map').classList.add('live');
   const view = window.A2ZCity.mount($('map'), { onSelect: (id, index) => select(id, false, index ?? null) });
-  return { update: (values, id) => { view.update(report, values, palette, alertDistricts()); view.select(id, worker, false); }, reset: view.reset, select: view.select, deliverMail: view.deliverMail };
+  return { update: (values, id) => { view.update(report, values, palette, alertDistricts(), cityAgents()); view.select(id, worker, false); }, reset: view.reset, select: view.select, deliverMail: view.deliverMail, agentState: view.agentState };
 }
 
 function tiles() {
@@ -475,9 +475,112 @@ function select(id, fresh = false, index = null) {
   worker = id === 'workforce' ? index : null;
   if (!report) return;
   const values = tiles();
+  const agent = typeof id === 'string' && id.startsWith('agent:') ? cityAgents().find(a => 'agent:' + a.id === id) : null;
+  if (id?.startsWith?.('agent:') && !agent) selected = null;
   if (fresh || !map.select) map.update(values, selected);
-  else map.select(id, worker);
-  details(values.find(tile => tile.key === selected));
+  else map.select(selected, worker);
+  if (agent) agentPanel(agent);
+  else details(values.find(tile => tile.key === selected));
+}
+
+// ---------------- JARVIS agents in the city ----------------
+// Admin only (same rule as the JARVIS tab). Each agent is a robot around HQ. Click one to prompt it.
+// Chats are saved as normal JARVIS threads, so they also show in the JARVIS tab.
+const AGENTS = [
+  { id: 'main', name: 'JARVIS', color: '#ffb547', greeting: 'JARVIS online. Ask anything. I hand it to Email, Systems, Development or one of your bots.' },
+  { id: 'email', name: 'Email', color: '#e8aa79', greeting: 'Email agent. Ask about unread mail, bid invitations, invoices and deadlines.' },
+  { id: 'systems', name: 'Systems', color: '#7fb2ff', greeting: 'Systems and KPIs. Ask about leads, wins, pipelines, crews, runway or system health.' },
+  { id: 'build', name: 'Development', color: '#46e08a', greeting: 'Development. Describe a dashboard change. I draft a sandbox plan and QC checks it.' },
+  { id: 'qc', name: 'QC', color: '#ff6fa8', greeting: 'QC. Ask me to review a plan or a change.' },
+];
+const BOT_COLORS = ['#c58bff', '#3fe0d0', '#ffd23f', '#ff8a5c'];
+let agentBots = [];
+let botsLoaded = false;
+const agentChats = new Map();
+function cityAgents() {
+  if (report?.access?.admin !== true) return [];
+  return [...AGENTS.filter(a => a.id !== 'email' || report.access?.mailbox !== false),
+    ...agentBots.slice(0, 4).map((bot, i) => ({ id: bot.id, name: bot.name, color: BOT_COLORS[i], greeting: bot.description || 'Custom bot.' }))];
+}
+async function loadAgentBots() {
+  if (botsLoaded || report?.access?.admin !== true) return;
+  botsLoaded = true;
+  try {
+    const response = await fetch('/api/jarvis-memory?role=main', { headers: authHeaders() });
+    if (!response.ok) return;
+    const data = await response.json();
+    agentBots = Array.isArray(data.bots) ? data.bots.filter(bot => /^bot-[a-z0-9-]{2,24}$/.test(bot.id)) : [];
+    if (agentBots.length && report) select(selected, true, worker);
+  } catch { /* Bots are optional. Built-in agents still show. */ }
+}
+function chatFor(id) {
+  if (!agentChats.has(id)) agentChats.set(id, { threadId: null, messages: [], busy: false });
+  return agentChats.get(id);
+}
+function agentMessage(message) {
+  const item = node('div', undefined, 'agent-msg ' + message.role + (message.error ? ' error' : ''));
+  for (const line of String(message.content || '').split('\n').map(l => l.trim()).filter(Boolean)) item.append(node('p', line.replace(/\*\*/g, '')));
+  if (message.note) item.append(node('small', message.note));
+  return item;
+}
+function agentPanel(agent) {
+  $('detail').hidden = false;
+  $('detail-title').textContent = agent.name;
+  const panel = $('detail-content');
+  panel.replaceChildren();
+  const chat = chatFor(agent.id);
+  const log = node('div', undefined, 'agent-log');
+  log.setAttribute('aria-live', 'polite');
+  log.append(node('p', agent.greeting, 'muted'), ...chat.messages.map(agentMessage));
+  if (chat.busy) log.append(node('p', agent.name + ' is working…', 'muted thinking'));
+  const form = node('form', undefined, 'agent-form');
+  const input = node('textarea');
+  input.maxLength = 1000; input.rows = 3; input.placeholder = 'Message ' + agent.name; input.setAttribute('aria-label', 'Message ' + agent.name);
+  input.disabled = chat.busy;
+  const send = node('button', chat.busy ? 'Working…' : 'Send', 'primary'); send.type = 'submit'; send.disabled = chat.busy;
+  const fresh = node('button', 'New chat'); fresh.type = 'button'; fresh.disabled = chat.busy || !chat.messages.length;
+  const full = node('a', 'Open in JARVIS'); full.href = '#jarvis'; full.className = 'agent-link';
+  const actions = node('div', undefined, 'agent-actions');
+  actions.append(full, node('span'), fresh, send);
+  form.append(input, actions);
+  input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
+  form.addEventListener('submit', event => { event.preventDefault(); const text = input.value.trim(); if (text) sendToAgent(agent, text); });
+  fresh.addEventListener('click', () => { agentChats.delete(agent.id); agentPanel(agent); });
+  panel.append(log, form);
+  log.scrollTop = log.scrollHeight;
+  if (!chat.busy) input.focus({ preventScroll: true });
+}
+async function sendToAgent(agent, text) {
+  const chat = chatFor(agent.id);
+  if (chat.busy) return;
+  chat.messages.push({ role: 'user', content: text });
+  chat.busy = true;
+  map.agentState?.(agent.id, 'busy');
+  const redraw = () => { if (selected === 'agent:' + agent.id) agentPanel(agent); };
+  redraw();
+  const post = body => fetch('/api/jarvis', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) })
+    .then(async response => ({ response, data: await response.json().catch(() => ({})) }));
+  try {
+    const body = { role: agent.id, prompt: text, preset: $('range').value, ...(chat.threadId ? { threadId: chat.threadId } : { newThread: true }) };
+    let { response, data } = await post(body);
+    if (response.status === 404 && body.threadId) {
+      delete body.threadId; body.newThread = true;
+      ({ response, data } = await post(body));
+    }
+    if (!response.ok) throw new Error(data.error || 'JARVIS request failed (HTTP ' + response.status + ').');
+    if (data.threadId) chat.threadId = data.threadId;
+    const names = Object.fromEntries(cityAgents().map(a => [a.id, a.name]));
+    const route = (data.trace || []).filter(id => id !== agent.id).map(id => names[id] || id);
+    chat.messages.push({ role: 'assistant', content: data.answer || data.error || 'No answer.', note: [route.length ? 'Via ' + route.join(' > ') : '', data.memoryError || ''].filter(Boolean).join(' · ') });
+    map.agentState?.(agent.id, 'done');
+    if (data.agent && data.agent !== agent.id) map.agentState?.(data.agent, 'done');
+  } catch (error) {
+    chat.messages.push({ role: 'assistant', content: error.message || 'JARVIS request failed.', error: true });
+    map.agentState?.(agent.id, 'error');
+  } finally {
+    chat.busy = false;
+    redraw();
+  }
 }
 
 async function refresh() {
@@ -537,6 +640,7 @@ async function refresh() {
     $('status').dataset.state = mode === 'sample' ? 'sample' : 'live';
     alertBadge();
     select(selected, true, worker);
+    loadAgentBots();
     lastLoad = Date.now();
     if (firstLoad || !hadMailbox) updateMail();
   } catch (error) {

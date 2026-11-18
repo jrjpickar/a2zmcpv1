@@ -81,6 +81,7 @@ export function mount(container, opts = {}) {
   S.traffic = new THREE.Group(); scene.add(S.traffic); S.cars = []; S.crewPos = new Map();
   S.mailFlights = new THREE.Group();
   S.mailArrivals = [];
+  S.agentStates = new Map(); S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {};
   S.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   scene.add(S.mailFlights);
   resize();
@@ -95,7 +96,7 @@ export function mount(container, opts = {}) {
     if (hit) S.opts.onSelect?.(hit.key, hit.worker);
   });
   loop();
-  return { update, select, reset, unmount, drive, deliverMail };
+  return { update, select, reset, unmount, drive, deliverMail, agentState };
 }
 
 export function unmount() {
@@ -155,7 +156,7 @@ function scenery(scene) {
 }
 
 // ---------------- dynamic city ----------------
-function update(report, tiles, palette = [], alerts = []) {
+function update(report, tiles, palette = [], alerts = [], agents = []) {
   if (!S) return;
   if (S.city) { S.scene.remove(S.city); S.city.traverse(dispose); }
   S.labels.replaceChildren(); S.clickables = []; S.labelList = []; S.anim = []; S.hovered = null; S.workers = [];
@@ -164,6 +165,7 @@ function update(report, tiles, palette = [], alerts = []) {
   const tile = Object.fromEntries((tiles || []).map(t => [t.key, t]));
   seed = 11;
   hq(city, report);
+  agentRing(city, agents);
   leads(city, report.kpis.funnel?.leads, tile.leads);
   proposals(city, report.kpis.funnel?.proposals, tile.proposals);
   wins(city, report.kpis.funnel?.wins, tile.wins);
@@ -259,7 +261,8 @@ function label(key, anchor, title, value, small, always) {
   el.append(b);
   if (value != null && small) { const s = document.createElement('span'); s.textContent = value; el.append(s); }
   if (!small && S.alerts.has(key)) { el.classList.add('alert'); el.setAttribute('aria-label', title + ', alert triggered'); }
-  el.style.setProperty('--c', '#' + COLORS[key].toString(16).padStart(6, '0'));
+  el.style.setProperty('--c', '#' + (COLORS[key] ?? S.agentColors[key] ?? 0xffffff).toString(16).padStart(6, '0'));
+  if (S.agentColors[key] !== undefined) { el.classList.add('agent'); el.dataset.state = S.agentStates.get(key) || 'idle'; S.agentLabels[key] = el; }
   el.addEventListener('click', () => S.opts.onSelect?.(key));
   el.addEventListener('pointerenter', () => setHover({ key }));
   el.addEventListener('pointerleave', () => setHover(null));
@@ -299,6 +302,69 @@ function hq(city, report) {
     halo.material.color.setHex(on ? 0xffffff : COLORS.hq);
     light.intensity = on ? 45 + Math.sin(t * 5) * 10 : 25;
   });
+}
+
+// JARVIS agents: one robot per agent on an inner ring around HQ, between the district roads. Click one to prompt it.
+// agents: [{ id, name, color }]. Key is 'agent:<id>'. agentState(id, 'idle' | 'busy' | 'done' | 'error') drives the animation.
+const AGENT_R = 7.6;
+function agentRing(city, agents) {
+  S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {};
+  const list = (agents || []).slice(0, DISTRICTS.length);
+  list.forEach((agent, i) => {
+    const key = 'agent:' + agent.id;
+    const angle = Math.PI - (i + 0.5) * 2 * Math.PI / DISTRICTS.length;
+    const x = Math.sin(angle) * AGENT_R, z = Math.cos(angle) * AGENT_R;
+    const color = typeof agent.color === 'number' ? agent.color : parseInt(String(agent.color || '#ffffff').replace('#', ''), 16) || 0xffffff;
+    S.agentSpots[key] = [x, z]; S.agentColors[key] = color;
+    const lead = agent.id === 'main', size = lead ? 1.65 : 1.3;
+    const g = new THREE.Group(); g.position.set(x, 0.2, z); g.rotation.y = angle; g.userData.key = key; city.add(g); S.clickables.push(g);
+    const pad = at(cyl(0.75 * size, 0.85 * size, 0.1, mat(0x1b2240, { roughness: 0.8 }), 28), 0, 0.05, 0); pad.castShadow = false; g.add(pad);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85 * size, 0.05, 8, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55 }));
+    ring.rotation.x = Math.PI / 2; ring.position.y = 0.12; g.add(ring);
+    const bot = new THREE.Group(); bot.scale.setScalar(size); g.add(bot);
+    const shell = mat(0xe9edf7, { roughness: 0.35, metalness: 0.25 }), trim = mat(color, { roughness: 0.4, emissive: color, emissiveIntensity: 0.25 });
+    const eye = new THREE.MeshBasicMaterial({ color });
+    bot.add(at(cyl(0.3, 0.22, 0.5, trim, 18), 0, 0.62, 0));
+    bot.add(at(cyl(0.31, 0.31, 0.06, shell, 18), 0, 0.88, 0));
+    const chest = at(box(0.2, 0.12, 0.04, glow(color, 0.9)), 0, 0.66, 0.29); chest.castShadow = false; bot.add(chest);
+    const armL = at(box(0.09, 0.34, 0.11, shell), -0.38, 0.62, 0), armR = at(box(0.09, 0.34, 0.11, shell), 0.38, 0.62, 0);
+    bot.add(armL, armR);
+    const head = new THREE.Group(); head.position.y = 1.14; bot.add(head);
+    head.add(box(0.56, 0.4, 0.46, shell));
+    const visor = at(box(0.46, 0.2, 0.03, mat(0x0d1226, { roughness: 0.2, metalness: 0.6 })), 0, 0.01, 0.235); visor.castShadow = false; head.add(visor);
+    const eyeL = at(ball(0.045, eye, 8), -0.1, 0.01, 0.255), eyeR = at(ball(0.045, eye, 8), 0.1, 0.01, 0.255);
+    head.add(eyeL, eyeR);
+    head.add(at(cyl(0.015, 0.015, 0.22, mat(C.steel), 6), 0, 0.31, 0));
+    const tip = at(ball(0.06, new THREE.MeshBasicMaterial({ color }), 10), 0, 0.44, 0); head.add(tip);
+    if (lead) head.add(at(box(0.6, 0.05, 0.5, glow(COLORS.hq, 0.7)), 0, 0.22, 0));
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 1.4), new THREE.MeshBasicMaterial({ visible: false })); hit.position.y = 1.1; g.add(hit);
+    label(key, new THREE.Vector3(x, 0.2 + 2.1 * size, z), agent.name, null, true, true);
+    const phase = i * 1.3;
+    S.anim.push(t => {
+      const state = S.agentStates.get(key) || 'idle', busy = state === 'busy', on = S.selected === key || S.hovered?.key === key;
+      bot.position.y = 0.08 + Math.sin(t * (busy ? 6 : 1.6) + phase) * (busy ? 0.06 : 0.04);
+      head.rotation.y = busy ? Math.sin(t * 5 + phase) * 0.45 : Math.sin(t * 0.5 + phase) * 0.15;
+      armL.rotation.x = busy ? Math.sin(t * 9) * 0.7 : 0; armR.rotation.x = busy ? -Math.sin(t * 9) * 0.7 : 0;
+      const tint = state === 'error' ? C.bad : state === 'done' ? C.ok : color;
+      eye.color.setHex(tint); tip.material.color.setHex(tint); ring.material.color.setHex(on ? 0xffffff : tint);
+      tip.visible = !busy || Math.sin(t * 14) > -0.2;
+      const blink = !busy && (t + phase) % 4 < 0.12;
+      eyeL.scale.y = eyeR.scale.y = blink ? 0.2 : 1;
+      ring.rotation.z = busy ? t * 3 : t * 0.4;
+      ring.material.opacity = on ? 0.95 : busy ? 0.6 + Math.sin(t * 8) * 0.3 : 0.45;
+      ring.scale.setScalar(on ? 1.12 + Math.sin(t * 3) * 0.03 : 1);
+    });
+  });
+}
+function agentState(id, state = 'idle') {
+  if (!S) return;
+  const key = 'agent:' + id;
+  S.agentStates.set(key, state);
+  if (S.agentLabels[key]) S.agentLabels[key].dataset.state = state;
+  if (state === 'done' || state === 'error') {
+    clearTimeout(S['agentTimer' + key]);
+    S['agentTimer' + key] = setTimeout(() => { if (S && S.agentStates.get(key) === state) agentState(id, 'idle'); }, state === 'done' ? 2500 : 6000);
+  }
 }
 
 // Leads: a parking lot that fills with cars, plus a car that keeps arriving.
@@ -791,10 +857,11 @@ function select(key, worker = null, fly = true) {
   const changed = key !== S.selected && fly;
   S.selected = key; S.worker = key === 'workforce' ? worker : null;
   highlight();
-  if (!changed || !(SPOTS[key] || key === 'hq')) return;
+  const agent = S.agentSpots[key];
+  if (!changed || !(SPOTS[key] || key === 'hq' || agent)) return;
   S.controls.autoRotate = false;
-  const [x, z] = SPOTS[key] || [0, 0];
-  S.focus = { target: new THREE.Vector3(x * 0.55, 1.8, z * 0.55), zoom: key === 'workforce' ? 1.9 : 1.5, t0: now(), from: S.controls.target.clone(), fromZoom: S.camera.zoom };
+  const [x, z] = SPOTS[key] || agent || [0, 0];
+  S.focus = { target: agent ? new THREE.Vector3(x, 1.4, z) : new THREE.Vector3(x * 0.55, 1.8, z * 0.55), zoom: agent ? 2.4 : key === 'workforce' ? 1.9 : 1.5, t0: now(), from: S.controls.target.clone(), fromZoom: S.camera.zoom };
 }
 function reset() {
   if (!S) return;
@@ -830,4 +897,4 @@ function loop() {
   }
 }
 
-if (typeof window !== 'undefined') window.A2ZCity = { mount, supported, drive, version: '1.0.0' };
+if (typeof window !== 'undefined') window.A2ZCity = { mount, supported, drive, version: '1.1.0' };

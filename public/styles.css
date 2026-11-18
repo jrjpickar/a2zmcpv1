@@ -298,3 +298,21 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
   .jarvis-msg { max-width: 100%; }
   .views { margin-left: 0; overflow-x: auto; }
 }
+/* JARVIS agents in the city */
+.c3-label.agent { border-style: dashed; }
+.c3-label.agent[data-state="busy"]::after, .c3-label.agent[data-state="error"]::after { content: ""; position: absolute; top: -4px; right: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--c); animation: pulse .5s infinite alternate; }
+.c3-label.agent[data-state="error"]::after { background: #ff4d5e; }
+.c3-label.agent[data-state="done"] { border-color: #2ee67a; }
+.agent-log { display: grid; gap: 8px; margin-top: 4px; max-height: min(52vh, 460px); overflow: auto; padding-right: 2px; }
+.agent-log > p { margin: 0; line-height: 1.45; }
+.agent-msg { max-width: 92%; padding: 8px 11px; border: 1px solid #2f2c55; border-radius: 12px; background: #171b36; font-size: .86rem; line-height: 1.45; overflow-wrap: anywhere; }
+.agent-msg p { margin: 0; }
+.agent-msg p + p { margin-top: 6px; }
+.agent-msg.user { justify-self: end; border-color: #6b4d2a; background: #2a2016; }
+.agent-msg.error { border-color: #ff4d5e; color: #ffb3ba; }
+.agent-msg small { display: block; margin-top: 6px; color: var(--dim); font-size: .72rem; }
+.agent-form { display: grid; gap: 8px; margin-top: 12px; }
+.agent-form textarea { width: 100%; min-height: 64px; resize: vertical; font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; background: #1c221d; }
+.agent-actions { display: flex; align-items: center; gap: 8px; }
+.agent-actions span { flex: 1; }
+.agent-link { color: var(--accent); font-size: .8rem; }

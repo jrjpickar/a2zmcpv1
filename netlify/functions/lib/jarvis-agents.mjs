@@ -56,7 +56,7 @@ export function groqModel(key, fetchImpl = fetch, { model = JARVIS_MODEL, usage 
   const call = async (instruction, context, structured = false, guidance = null) => {
     const history = Array.isArray(guidance?.history) ? guidance.history : [];
     const system = [boundary + instruction, guidance?.shared, guidance?.memory].filter(Boolean).join('\n\n');
-    const response = await fetchImpl('https://api.groq.com/openai/v1/chat/completions', {
+    const request = strict => fetchImpl('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20000),
       headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -64,24 +64,44 @@ export function groqModel(key, fetchImpl = fetch, { model = JARVIS_MODEL, usage 
         temperature: 0,
         max_completion_tokens: 1152,
         ...groqReasoningOptions(model),
-        ...(structured ? { response_format: { type: 'json_object' } } : {}),
+        ...(strict ? { response_format: { type: 'json_object' } } : {}),
         messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: JSON.stringify(context) }],
       }),
     });
+    // Groq error body: { error: { message, type, code } }. Only code and a short message are kept; never the request.
+    const groqError = async response => {
+      let info = {};
+      try { info = JSON.parse(await boundedResponse(response, 16384))?.error || {}; } catch { await response.body?.cancel?.().catch(() => {}); }
+      const code = typeof info.code === 'string' ? info.code.slice(0, 60) : '';
+      const message = typeof info.message === 'string' ? info.message.replace(/\s+/g, ' ').slice(0, 200) : '';
+      return { code, message };
+    };
+    let response = await request(structured);
+    if (!response.ok && structured && response.status === 400) {
+      // json_validate_failed: Groq rejected the model's JSON. Retry once without JSON mode and parse the reply here.
+      const first = await groqError(response);
+      if (first.code !== 'json_validate_failed') {
+        throw failure('Groq request failed (HTTP 400' + (first.code ? ', ' + first.code : '') + ')' + (first.message ? ': ' + first.message : '.'));
+      }
+      response = await request(false);
+    }
     if (!response.ok) {
-      await response.body?.cancel();
-      if (response.status === 429) throw failure('Groq quota reached. Retry after the limit resets.', 429);
-      throw failure('Groq request failed (HTTP ' + response.status + ').');
+      if (response.status === 429) { await response.body?.cancel(); throw failure('Groq quota reached. Retry after the limit resets.', 429); }
+      const { code, message } = await groqError(response);
+      throw failure('Groq request failed (HTTP ' + response.status + (code ? ', ' + code : '') + ')' + (message ? ': ' + message : '.'));
     }
     const payload = JSON.parse(await boundedResponse(response, 131072));
     usage.calls++;
     if (Number.isFinite(payload.usage?.total_tokens)) usage.total += payload.usage.total_tokens;
     const content = payload.choices?.[0]?.message?.content;
     if (typeof content !== 'string' || !content.trim()) throw failure('Groq returned an empty answer.');
-    if (!structured) return content.replace(/[\u2013\u2014]/g, '-').trim().slice(0, 5500);
+    if (!structured) return content.replace(/[–—]/g, '-').trim().slice(0, 5500);
+    const raw = content.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
     try {
-      return JSON.parse(content);
+      return JSON.parse(raw);
     } catch {
+      const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
+      if (start >= 0 && end > start) { try { return JSON.parse(raw.slice(start, end + 1)); } catch {} }
       throw failure('Groq returned invalid JSON.');
     }
   };
