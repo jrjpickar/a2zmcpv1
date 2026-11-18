@@ -9,13 +9,17 @@
   "scripts": {
     "test": "node --test",
     "build": "node --test",
-    "build:city": "node scripts/build-city.mjs"
+    "build:city": "node scripts/build-city.mjs",
+    "sandbox": "node sandbox/server.mjs",
+    "validate": "node scripts/validate.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
     "three": "^0.187.0"
   },
   "dependencies": {
+    "@langchain/core": "1.4.1",
+    "@langchain/langgraph": "1.7.5",
     "@netlify/blobs": "^10.7.13"
   }
 }

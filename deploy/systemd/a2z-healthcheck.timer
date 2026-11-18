@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 5 minutes, check A2Z MCP /health and ping Healthchecks.io
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

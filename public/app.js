@@ -526,8 +526,8 @@ async function refresh() {
       if (selected === 'mail') selected = null;
     }
     if (highlevelMode) {
-      $('nav-settings').hidden = $('nav-health').hidden = report.access?.admin !== true;
-      if (report.access?.admin !== true && ($('settings').hidden === false || $('health').hidden === false)) route();
+      $('nav-settings').hidden = $('nav-health').hidden = $('nav-jarvis').hidden = report.access?.admin !== true;
+      if (report.access?.admin !== true && ($('settings').hidden === false || $('health').hidden === false || $('jarvis').hidden === false)) route();
     }
     $('auth').hidden = true;
     $('dashboard').hidden = false;
@@ -684,13 +684,27 @@ $('check').addEventListener('click', () => alertRequest('POST', { action: 'check
 
 function route() {
   const canAdmin = !highlevelMode || report?.access?.admin === true;
-  const view = canAdmin && location.hash === '#settings' ? 'settings' : canAdmin && location.hash === '#health' ? 'health' : 'city';
+  const view = canAdmin && location.hash === '#settings' ? 'settings' : canAdmin && location.hash === '#health' ? 'health' : canAdmin && location.hash === '#jarvis' ? 'jarvis' : 'city';
   $('brain').hidden = view !== 'city';
   $('settings').hidden = view !== 'settings';
   $('health').hidden = view !== 'health';
-  for (const [id, on] of [['nav-city', view === 'city'], ['nav-settings', view === 'settings'], ['nav-health', view === 'health']]) on ? $(id).setAttribute('aria-current', 'page') : $(id).removeAttribute('aria-current');
+  $('jarvis').hidden = view !== 'jarvis';
+  for (const [id, on] of [['nav-city', view === 'city'], ['nav-settings', view === 'settings'], ['nav-health', view === 'health'], ['nav-jarvis', view === 'jarvis']]) on ? $(id).setAttribute('aria-current', 'page') : $(id).removeAttribute('aria-current');
   if (view === 'settings') { renderSettings(); loadAlerts(); }
   if (view === 'health') loadHealth();
+  if (view === 'jarvis') loadJarvis();
+}
+
+// JARVIS loads on first visit so the city view stays as light as before.
+let jarvisPanel = null;
+async function loadJarvis() {
+  try {
+    jarvisPanel ||= (await import('./jarvis.mjs')).createJarvisPanel({ headers: authHeaders, preset: () => $('range').value });
+    if (!jarvisPanel.isConnected) $('jarvis').replaceChildren(jarvisPanel);
+    jarvisPanel.load();
+  } catch {
+    $('jarvis').replaceChildren(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'JARVIS is available on the deployed site or with npm run sandbox.' }));
+  }
 }
 
 // ---------------- diagnostics ----------------

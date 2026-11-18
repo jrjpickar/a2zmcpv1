@@ -146,6 +146,36 @@ Booked and available follow the Dispatch board's own rules (`getLiveBookedIdenti
 
 Make credits come live from the Make organization (allowance minus consumed) when Make reports them, else allowance minus usage since the last reset. Netlify has no credit API: enter the balance from Usage and billing in Alerts, Billing inputs. `MAKE_CYCLE_*` and `NETLIFY_CREDITS_*` env vars still work as fallbacks.
 
+## JARVIS agents
+
+The JARVIS tab (admins only) runs LangGraph agents on Groq `openai/gpt-oss-20b`. **Main** hands each request to **Email**, **Systems and KPIs**, **Development** (checked automatically by **QC**) or a custom bot you create in the Learning panel. Each agent keeps saved chats (50 per agent, 80 messages each, up to 10 pinned), search, Markdown export, "remember:" lessons, Helpful or Needs work ratings, and a playbook it rewrites every 5 ratings. A new playbook is scored over its next 6 ratings. If its helpful rate falls 20 or more points below the previous version (which needs at least 3 ratings), the previous version is restored and logged. "remember for all agents:" adds to company memory (20 entries of up to 300 characters), which every agent receives. Calls without a chat (no `threadId` or `newThread`) use no storage. Groq is called only when you send a message or a reflection runs. History sent to the model is the last 6 messages within `JARVIS_HISTORY_CHARS` (default 6000).
+
+| Variable | Purpose |
+| --- | --- |
+| `GROQ_API_KEY` | Required for agents. Optional `JARVIS_GROQ_MODEL` overrides `openai/gpt-oss-20b` |
+| `MCP_COMMAND_CENTER_TOKEN` | Existing token. The Email agent reads the email app with it. `jarvis-mail-sync` refreshes a snapshot every 30 minutes with no Groq calls |
+| `JARVIS_EMAIL_URL`, `JARVIS_EMAIL_PAGES`, `JARVIS_EMAIL_SYNC` | Optional HTTPS override of the command-center URL, pages of 5 messages per sync (1 to 4, default 2), and `off` to stop the sync |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Optional. Moves JARVIS storage from the Netlify Blobs store `a2z-jarvis` to the Supabase table in `supabase/migrations`. Run that SQL in the Supabase SQL editor first. Keep the service key in Netlify Functions only |
+| `JARVIS_EXECUTE` | `off` disables the execution sandbox |
+
+**Execution sandbox.** Paste `/execute {plan JSON}` in any chat, or run a plan Development proposed after QC approves it. Validation runs first and returns a plan hash. **Run in sandbox** needs that exact hash and an audit record, then runs the plan on a throwaway in-memory SQLite copy of A2Z aggregates (no crew names or contacts) in a worker with a 3 second limit. Only `SELECT` and `CREATE VIEW` run. Module bindings, refresh schedules and refresh triggers are recorded as staged changes and are never applied to the live dashboard.
+
+**Local check.** `npm run sandbox` serves sample data at `http://127.0.0.1:4174`. The key is `a2z-local-sandbox-key`, and chats are saved in `.a2z-jarvis-local`. Use `node --import ./sandbox/fake-groq.mjs sandbox/server.mjs` for fixture replies with no Groq calls. `npm run validate` loads every function, runs the sandbox once and builds the static preview.
+
+## Docker server (Google Cloud e2-micro)
+
+The same functions also run as one standalone Node server (`server/index.mjs`) in Docker on a 24/7 Google Cloud Always Free e2-micro VM (Ubuntu 24.04, x86_64, 1 GB RAM). Netlify deploys are unchanged. Nothing is published to the internet: the container binds to `127.0.0.1:8080`, `GET /health` needs no key, and `/mcp` needs `Authorization: Bearer <MCP_AUTH_TOKEN>` (generated into `.env`). The container has a 512 MB memory limit (768 MB with swap), a 320 MB Node heap and Docker log rotation of 10 MB x 3. JARVIS memory goes to Supabase when `SUPABASE_URL` and `SUPABASE_KEY` are set (run `supabase/migrations` in the Supabase SQL editor first), otherwise to the `a2z-data` volume.
+
+**Network.** The VM has no public IPv4, only internal IPv4 and public IPv6. `deploy/setup-ipv6-net.sh` sets systemd-resolved to the public nat64.net DNS64 servers first and Cloudflare IPv6 DNS (`2606:4700:4700::1111`, `2606:4700:4700::1001`) as the backup, in `/etc/systemd/resolved.conf.d/zz-a2z-nat64.conf`, which loads after Google's `gce-resolved.conf` and starts with an empty `DNS=` to clear the metadata server entry. A networkd drop-in sets `DNSDefaultRoute=false` on `ens4` and keeps only `~internal` there. The script is safe to rerun on a VM fixed by hand: it rewrites files only when they differ, removes the old `10-a2z-nat64.conf` names, and restarts nothing when nothing changed. IPv4 only hosts such as GitHub work through nat64.net's NAT64 gateways. If nat64.net is down, hosts that publish IPv6 addresses (Cloudflare, Ubuntu mirrors, Google) still resolve through Cloudflare, but IPv4 only hosts such as GitHub fail until it is back. supabase.com has no IPv6 address. Whether your Supabase project host has one shows in the in-container check in `verify.sh`. Every 5 minutes the health timer restarts resolved if the Global current DNS server is not a nat64.net address. Google internal names (`*.internal`) stay on the metadata server so the guest agent and OS Login keep working. Docker runs with IPv6 and the same DNS servers. All SSH uses `gcloud compute ssh ubuntu@a2z-mcp --zone us-west1-b --tunnel-through-iap --ssh-key-file ~/.ssh/a2z-gcp`. To copy one file, use `gcloud compute scp <file> ubuntu@a2z-mcp:~/a2z-mcp/ --zone us-west1-b --tunnel-through-iap --ssh-key-file ~/.ssh/a2z-gcp`.
+
+**Uptime.** Create a check at Healthchecks.io: Name `A2Z MCP VM`, Schedule **Simple**, Period **5 minutes**, Grace Time **10 minutes**, Integrations **Email** on. Copy its ping URL (`https://hc-ping.com/<UUID>`) into `.env` as `HC_PING_URL`. The `a2z-healthcheck.timer` checks the local `/health` every 5 minutes. HTTP 200 pings the URL. Anything else pings `<URL>/fail`, which alerts right away. If the whole VM is down, pings stop and Healthchecks.io emails you after the grace time.
+
+1. From your computer: `deploy/push.sh` copies the repo to the VM over IAP as `ubuntu@a2z-mcp` with `--ssh-key-file ~/.ssh/a2z-gcp`. Then connect with the SSH command above and `cd a2z-mcp`.
+2. On the VM: `cd a2z-mcp && deploy/setup-ipv6-net.sh`. It must print a GitHub HTTP status and a `git ls-remote` line.
+3. `deploy/bootstrap-vm.sh`. It adds 2 GB swap (swappiness 10), updates the system, turns on unattended upgrades, installs Docker and git, sets SSH to key only, enables ufw with OpenSSH only, asks for `GROQ_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY` and `HC_PING_URL` without echoing them, starts the stack and installs the health timer.
+4. Run `deploy/verify.sh`, then `sudo reboot`, reconnect and run it again. It checks the container, timers, swap, memory, SSH, ufw, DNS64, `curl -6 https://github.com`, `git ls-remote`, a DNS failover test with nat64.net blocked for a few seconds, and that GitHub, the Groq API and Supabase answer from inside the container.
+5. Redeploy with `./deploy.sh`. Nothing pulls images or code on a schedule.
+
 ## Checks after deployment
 
 1. Open the dashboard and enter its access key. A GHL Custom Page can use the dashboard origin and prompt for the key.

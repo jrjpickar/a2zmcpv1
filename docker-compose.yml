@@ -1,0 +1,42 @@
+# A2Z MCP standalone server for a 1 GB VM. The port binds to 127.0.0.1 only. Nothing is published to the internet.
+services:
+  a2z-mcp:
+    build: .
+    image: a2z-mcp:latest
+    platform: linux/amd64
+    container_name: a2z-mcp
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # The VM has IPv6 egress only. Try IPv6 first so Node does not wait on unreachable IPv4 addresses.
+      NODE_OPTIONS: --max-old-space-size=320 --dns-result-order=ipv6first
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - a2z-data:/data
+    # Fits a 1 GB box next to the OS and Docker. Swap covers short peaks.
+    mem_limit: 512m
+    memswap_limit: 768m
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.30.0/24
+        - subnet: fd00:a2a2:0:2::/64
+
+volumes:
+  a2z-data:

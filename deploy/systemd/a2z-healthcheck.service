@@ -1,0 +1,9 @@
+[Unit]
+Description=A2Z MCP local /health check, reported to Healthchecks.io
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=@REPO@/.env
+ExecStart=/usr/local/bin/a2z-healthcheck

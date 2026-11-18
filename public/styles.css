@@ -238,3 +238,63 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
 }
 
 .mail-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------------- JARVIS ---------------- */
+#jarvis { max-width: 1320px; }
+.jarvis { display: grid; gap: 12px; }
+.jarvis-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.jarvis-head h1 { margin: 0 8px 0 0; font-size: 1.3rem; }
+.jarvis-badge { font-size: .78rem; color: var(--dim); }
+.jarvis-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 12px; min-height: 460px; }
+.jarvis-threads { display: grid; align-content: start; gap: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 10px; max-height: 70vh; overflow: auto; }
+.jarvis-threads > *, .jarvis-chat > * { min-width: 0; }
+.jarvis-threads-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.jarvis-threads-list li { display: flex; align-items: stretch; gap: 2px; }
+.jarvis-thread { flex: 1; min-width: 0; display: grid; text-align: left; gap: 2px; padding: 7px 9px; border-color: transparent; background: transparent; }
+.jarvis-thread span, .jarvis-thread small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jarvis-thread small { color: var(--dim); font-size: .72rem; }
+.jarvis-thread.active { border-color: var(--accent); background: #1c221d; }
+.jarvis-icon { flex: none; padding: 4px 5px; font-size: .8rem; background: transparent; border-color: transparent; color: var(--dim); }
+.jarvis-icon:hover { color: #fff; }
+.jarvis-empty { padding: 8px; font-size: .8rem; }
+.jarvis-chat { display: grid; grid-template-rows: minmax(0, 1fr) auto auto; gap: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 12px; min-height: 0; }
+.jarvis-log { display: flex; flex-direction: column; gap: 10px; overflow: auto; max-height: 62vh; min-height: 280px; padding-right: 4px; }
+.jarvis-msg { max-width: 88%; padding: 10px 13px; border-radius: 14px; line-height: 1.45; font-size: .92rem; overflow-wrap: anywhere; }
+.jarvis-msg.user { align-self: flex-end; background: #2c241b; border: 1px solid #746047; }
+.jarvis-msg.assistant { align-self: flex-start; background: #121612; border: 1px solid var(--line); }
+.jarvis-msg.error { border-color: #ff4d5e; }
+.jarvis-msg.intro { color: var(--dim); }
+.jarvis-msg p { margin: 0 0 6px; }
+.jarvis-msg ul, .jarvis-msg ol { margin: 4px 0 8px; padding-left: 20px; }
+.jarvis-heading { font-weight: 700; }
+.jarvis-trace { font-size: .72rem; color: var(--accent); margin-bottom: 6px; letter-spacing: .02em; }
+.jarvis-msg.thinking { display: flex; gap: 5px; }
+.jarvis-msg.thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); animation: jarvis-pulse 1s infinite alternate; }
+.jarvis-msg.thinking span:nth-child(2) { animation-delay: .2s; }
+.jarvis-msg.thinking span:nth-child(3) { animation-delay: .4s; }
+@keyframes jarvis-pulse { to { opacity: .25; } }
+.jarvis-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.jarvis-chip { font-size: .8rem; padding: 6px 10px; border-radius: 99px; }
+.jarvis-composer { display: flex; gap: 8px; align-items: flex-end; }
+.jarvis-composer textarea, .jarvis-composer input { flex: 1; min-width: 0; font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; background: #1c221d; resize: vertical; }
+.jarvis-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.jarvis-rate { font-size: .76rem; padding: 4px 9px; }
+.jarvis-rate.on { border-color: var(--accent); color: var(--accent); }
+.jarvis-plan { margin-top: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; display: grid; gap: 6px; }
+.jarvis-table { overflow: auto; max-width: 100%; }
+.jarvis-table table { border-collapse: collapse; font-size: .78rem; }
+.jarvis-table th, .jarvis-table td { border: 1px solid var(--line); padding: 3px 7px; text-align: left; }
+.jarvis-status { min-height: 1.2em; margin: 0; }
+.jarvis-learning { padding: 12px 16px; display: grid; gap: 8px; }
+.jarvis-learning summary { cursor: pointer; font-weight: 650; }
+.jarvis-learning h3 { margin: 12px 0 4px; color: var(--accent); font-size: .74rem; letter-spacing: .1em; text-transform: uppercase; }
+.jarvis-lessons { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+.jarvis-tag { font-size: .7rem; padding: 1px 6px; border: 1px solid var(--line); border-radius: 99px; color: var(--dim); }
+.jarvis-bot-form { display: grid; gap: 8px; max-width: 640px; }
+.jarvis-bot-form input, .jarvis-bot-form textarea { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; background: #1c221d; }
+@media (max-width: 760px) {
+  .jarvis-layout { grid-template-columns: 1fr; }
+  .jarvis-threads { max-height: 220px; }
+  .jarvis-msg { max-width: 100%; }
+  .views { margin-left: 0; overflow-x: auto; }
+}
