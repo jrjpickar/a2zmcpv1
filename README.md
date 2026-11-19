@@ -192,3 +192,25 @@ The same functions also run as one standalone Node server (`server/index.mjs`) i
 - [Make organization usage](https://developers.make.com/api-documentation/api-reference/organizations)
 - [Netlify deploy API](https://open-api.netlify.com/)
 - [Netlify team billing usage](https://docs.netlify.com/manage/accounts-and-billing/billing/billing-for-credit-based-plans/monitor-usage-for-credit-based-plans/)
+
+## JARVIS agents, Slack and custom instructions
+
+**Agents.** Main, Email, Systems, Development and QC run on Groq. Two optional agents use other providers:
+
+| Agent | Netlify Functions variables | Default model |
+| --- | --- | --- |
+| Gemini | `GEMINI_API_KEY`, optional `GEMINI_MODEL` | `gemini-2.5-flash` |
+| Workers AI | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_AI_TOKEN` (Workers AI permission), optional `CLOUDFLARE_AI_MODEL` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` |
+
+Main only delegates to an agent whose key is set. "Second opinion" goes to Gemini. "Llama" or "Workers AI" goes to Workers AI.
+
+**City.** Admins see one robot per agent around HQ, plus up to 2 custom bots and a "+ New bot" robot. Clicking a robot opens its chat. Chats are saved as normal JARVIS threads. The city also has delegation packets, speech bubbles, voice (the browser's own speech recognition and speech synthesis), ratings, plan approval (sandbox only), "Ask JARVIS about this" on every district, **Brief me** (a camera tour with one line per district, plus an optional daily auto run), proactive notes when wins, proposals, runway, alerts or bid invitations change, and robots that walk to a district while one of its alerts is firing.
+
+**Custom instructions.** Use **Instructions** in the city or the JARVIS tab. They are saved in JARVIS storage under `settings/instructions` and added to every agent's system prompt (Groq, Gemini, Workers AI and Slack). Company memory and safety rules still come first.
+
+**Slack.** A single JARVIS bot user.
+1. At api.slack.com/apps, create a new app from the manifest `deploy/slack-manifest.yml`. Set its request URL to `https://<operations-domain>/api/slack/events`, then install it to the workspace.
+2. In Netlify Functions, set `SLACK_BOT_TOKEN` (`xoxb-`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USERS` (your Slack member ID, comma separated, required) and optionally `SLACK_BRIEFING_CHANNEL` (a channel ID; invite JARVIS to it). `DASHBOARD_KEY` must be set. Redeploy.
+3. DM JARVIS or @mention it. Prefixes: `email:`, `systems:`, `dev:`, `qc:`, `gemini:`, `workers:` or a bot name. You can also use `remember:`, `remember for all agents:`, :+1: / :-1: reactions (feedback), `run plan` (sandbox only), `new chat` and `help`. Events are acknowledged right away and processed by `slack-worker-background`. Messages from users not listed in `SLACK_ALLOWED_USERS` are ignored. The weekday briefing posts at 7:05 AM Pacific (15:05 UTC, so 8:05 AM during daylight saving time).
+
+**Mailbox summaries** need the A2Z Email Inbox app to answer `GET /api/mcp/command-center?view=messages&limit=5&cursor=<c>` with `{ "messages": [{ "id", "subject", "text", "receivedAt", "from"? }], "nextCursor": string|null }`, using the same bearer token. Until then, counts work, and summaries and the Email agent's message reads say so.

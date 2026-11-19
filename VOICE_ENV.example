@@ -1,0 +1,57 @@
+# Copy to .env.voice locally. Keep the populated file outside source control.
+# Enable deliberately after reviewing the provider and data handling notes.
+VOICE_ENABLED=0
+VOICE_ORIGIN=http://127.0.0.1:8888
+# Loopback development only. Leave 0 on Netlify to use strong-consistency Blobs.
+VOICE_LOCAL_MEMORY=1
+# Sample exercises the existing report without live business integrations.
+DATA_MODE=sample
+# Existing dashboard sign-in and separate server-only MCP credential, each >=16 characters.
+DASHBOARD_KEY=
+MCP_KEY=
+
+# Enable only providers approved for this deployment's transcripts and business data.
+# Priority is Groq, then Gemini, then OpenRouter. At least one must be configured and approved.
+VOICE_APPROVED_REASONING=
+GROQ_API_KEY=
+GROQ_MODEL=
+GEMINI_API_KEY=
+VOICE_GEMINI_MODEL=
+OPENROUTER_API_KEY=
+VOICE_OPENROUTER_MODEL=
+
+# Optional speech recognition. Use a full Whisper-compatible endpoint URL.
+VOICE_WHISPER_URL=
+VOICE_WHISPER_MODEL=whisper-1
+VOICE_WHISPER_KEY=
+VOICE_GROQ_STT_APPROVED=0
+VOICE_GROQ_STT_MODEL=whisper-large-v3-turbo
+# Browser speech recognition can transmit audio to the browser vendor.
+VOICE_BROWSER_STT_APPROVED=0
+
+# Optional text-to-speech. Without a URL, the browser uses a local English voice when available.
+VOICE_TTS_URL=
+VOICE_TTS_KEY=
+VOICE_EXTERNAL_TTS_APPROVED=0
+VOICE_EXTERNAL_TTS_URL=
+VOICE_EXTERNAL_TTS_KEY=
+
+# Daily counters reset at UTC midnight. Failed accepted turns also count.
+VOICE_DAILY_SESSIONS=50
+VOICE_DAILY_TURNS=100
+VOICE_SESSION_MINUTES=10
+VOICE_SESSION_TURNS=20
+VOICE_PROVIDER_TIMEOUT_MS=4500
+VOICE_MAX_OUTPUT_TOKENS=256
+
+# Optional Slack slash command. The mapping keys are Slack workspace ID + ':' + user ID.
+SLACK_SIGNING_SECRET=
+VOICE_SLACK_APP_ID=
+VOICE_SLACK_LINKS={}
+
+# Existing HighLevel variables. Required for Slack linked identities and HighLevel dashboard sign-in.
+GHL_APP_SHARED_SECRET=
+GHL_SESSION_SECRET=
+GHL_MARKETPLACE_COMPANY_ID=
+GHL_LOCATION_ID=
+GHL_MARKETPLACE_ALLOWED_USERS=

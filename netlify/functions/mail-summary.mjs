@@ -24,7 +24,7 @@ export default async (request, { fetchImpl = fetch } = {}) => {
   }
   try {
     const page = await summarizePage({ token, cursor, apiKey, model: process.env.GROQ_MODEL, fetchImpl });
-    return page ? json({ status: 'ok', ...page }) : json({ error: 'The email app still needs to enable paginated message access.' }, 501);
+    return page ? json({ status: 'ok', ...page }) : json({ error: 'Mailbox summaries need the A2Z Email Inbox app to serve message pages (view=messages). Mail counts still work.' }, 501);
   } catch (error) {
     if (error.retryAfter) return json({ error: 'Waiting for the mailbox or Groq rate limit.' }, 429, { 'Retry-After': String(error.retryAfter) });
     return json({ error: 'Could not summarize this mailbox page. Try again to resume.' }, 502);

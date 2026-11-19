@@ -1,4 +1,6 @@
+import { mountVoice } from './voice.js';
 import { setupMap, stations } from './map.js';
+import { instructionsForm } from './instructions.mjs';
 
 const $ = id => document.getElementById(id);
 const number = value => value == null ? '-' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value);
@@ -64,6 +66,18 @@ async function signInHighLevel() {
   }
 }
 
+const voiceDialog = $('voice-dialog');
+mountVoice($('voice-panel'), {
+  async getHeaders() {
+    if (highlevelMode) await signInHighLevel();
+    return authHeaders();
+  },
+  getPreset: () => $('range').value,
+});
+$('call-brain').onclick = () => voiceDialog.showModal();
+$('voice-close').onclick = () => voiceDialog.close();
+voiceDialog.addEventListener('close', () => $('voice-panel').dispatchEvent(new Event('close')));
+
 let report;
 let selected = null;
 let alertView = null;
@@ -81,7 +95,8 @@ function city3d() {
   $('stations').hidden = true;
   $('map').classList.add('live');
   const view = window.A2ZCity.mount($('map'), { onSelect: (id, index) => select(id, false, index ?? null) });
-  return { update: (values, id) => { view.update(report, values, palette, alertDistricts(), cityAgents()); view.select(id, worker, false); }, reset: view.reset, select: view.select, deliverMail: view.deliverMail, agentState: view.agentState };
+  return { update: (values, id) => { view.update(report, values, palette, alertDistricts(), cityAgents()); view.select(id, worker, false); }, reset: view.reset, select: view.select, deliverMail: view.deliverMail,
+    agentState: view.agentState, agentSay: view.agentSay, agentFlow: view.agentFlow };
 }
 
 function tiles() {
@@ -258,6 +273,8 @@ function details(tile) {
     for (const a of firing) box.append(node('span', a.message));
     panel.append(box);
   }
+  const ask = askAbout(tile);
+  if (ask) panel.append(ask);
   if (tile.key === 'hq') return hqPanel(panel);
   if (tile.key === 'mail') return mailPanel(panel);
   if (tile.key === 'system') {
@@ -461,6 +478,7 @@ async function updateMail() {
   const updated = next.status === 'unavailable' ? { ...mail, status: next.status } : next;
   const changed = mail.stats?.unreadIncoming !== updated.stats?.unreadIncoming;
   mail = updated;
+  noticeMail();
   if (changed) map.update(tiles(), selected);
   refreshMailPanel();
   if (arrivals) map.deliverMail?.(arrivals);
@@ -475,6 +493,7 @@ function select(id, fresh = false, index = null) {
   worker = id === 'workforce' ? index : null;
   if (!report) return;
   const values = tiles();
+  if (id === 'instructions') { if (fresh || !map.select) map.update(values, null); return; }
   const agent = typeof id === 'string' && id.startsWith('agent:') ? cityAgents().find(a => 'agent:' + a.id === id) : null;
   if (id?.startsWith?.('agent:') && !agent) selected = null;
   if (fresh || !map.select) map.update(values, selected);
@@ -488,50 +507,209 @@ function select(id, fresh = false, index = null) {
 // Chats are saved as normal JARVIS threads, so they also show in the JARVIS tab.
 const AGENTS = [
   { id: 'main', name: 'JARVIS', color: '#ffb547', greeting: 'JARVIS online. Ask anything. I hand it to Email, Systems, Development or one of your bots.' },
-  { id: 'email', name: 'Email', color: '#e8aa79', greeting: 'Email agent. Ask about unread mail, bid invitations, invoices and deadlines.' },
-  { id: 'systems', name: 'Systems', color: '#7fb2ff', greeting: 'Systems and KPIs. Ask about leads, wins, pipelines, crews, runway or system health.' },
+  { id: 'email', name: 'Email', color: '#e8aa79', greeting: 'Email agent. Ask about unread mail, bid invitations, invoices and deadlines.', watch: ['mail'] },
+  { id: 'systems', name: 'Systems', color: '#7fb2ff', greeting: 'Systems and KPIs. Ask about leads, wins, pipelines, crews, runway or system health.',
+    watch: ['leads', 'proposals', 'wins', 'pipelines', 'labor', 'workforce', 'runway', 'system'] },
   { id: 'build', name: 'Development', color: '#46e08a', greeting: 'Development. Describe a dashboard change. I draft a sandbox plan and QC checks it.' },
   { id: 'qc', name: 'QC', color: '#ff6fa8', greeting: 'QC. Ask me to review a plan or a change.' },
+  { id: 'gemini', name: 'Gemini', color: '#4f8cff', greeting: 'Gemini. Second opinions, longer writing and general questions, with A2Z numbers as context.' },
+  { id: 'cloudflare', name: 'Workers AI', color: '#f6821f', greeting: 'Workers AI on Cloudflare (Llama). Fast drafts, rewrites, brainstorming and a third opinion.' },
 ];
 const BOT_COLORS = ['#c58bff', '#3fe0d0', '#ffd23f', '#ff8a5c'];
+const NEW_BOT = { id: 'new', name: '+ New bot', color: '#9aa6bd', ghost: true };
 let agentBots = [];
 let botsLoaded = false;
 const agentChats = new Map();
-function cityAgents() {
+const notes = [];
+const store = {
+  get: (name, fallback) => { try { return localStorage.getItem('a2z-' + name) ?? fallback; } catch { return fallback; } },
+  set: (name, value) => { try { localStorage.setItem('a2z-' + name, value); } catch { /* storage is optional */ } },
+};
+let voiceOn = store.get('voice', 'off') === 'on';
+
+function cityAgents({ withGhost = true } = {}) {
   if (report?.access?.admin !== true) return [];
-  return [...AGENTS.filter(a => a.id !== 'email' || report.access?.mailbox !== false),
-    ...agentBots.slice(0, 4).map((bot, i) => ({ id: bot.id, name: bot.name, color: BOT_COLORS[i], greeting: bot.description || 'Custom bot.' }))];
+  const bots = agentBots.slice(0, 2).map((bot, i) => ({ id: bot.id, name: bot.name, color: BOT_COLORS[i], greeting: bot.description || 'Custom bot.' }));
+  return [...AGENTS.filter(a => a.id !== 'email' || report.access?.mailbox !== false), ...bots,
+    ...(withGhost && botsLoaded && bots.length < 2 ? [NEW_BOT] : [])];
 }
-async function loadAgentBots() {
-  if (botsLoaded || report?.access?.admin !== true) return;
-  botsLoaded = true;
+async function loadAgentBots(force = false) {
+  if ((botsLoaded && !force) || report?.access?.admin !== true) return;
   try {
     const response = await fetch('/api/jarvis-memory?role=main', { headers: authHeaders() });
     if (!response.ok) return;
     const data = await response.json();
     agentBots = Array.isArray(data.bots) ? data.bots.filter(bot => /^bot-[a-z0-9-]{2,24}$/.test(bot.id)) : [];
-    if (agentBots.length && report) select(selected, true, worker);
+    botsLoaded = true;
+    if (report) select(selected, true, worker);
   } catch { /* Bots are optional. Built-in agents still show. */ }
 }
 function chatFor(id) {
   if (!agentChats.has(id)) agentChats.set(id, { threadId: null, messages: [], busy: false });
   return agentChats.get(id);
 }
-function agentMessage(message) {
+const agentName = id => cityAgents().find(a => a.id === id)?.name || id;
+const firstLine = text => String(text || '').split('\n').map(l => l.replace(/^[-*•#\s]+/, '').replace(/\*\*/g, '').trim()).find(Boolean) || '';
+
+// Voice: browser speech recognition (Chrome, Edge, Safari) and speech synthesis. Nothing leaves the browser except the final text prompt.
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+function speak(text) {
+  if (!voiceOn || !window.speechSynthesis) return Promise.resolve();
+  return new Promise(resolve => {
+    const u = new SpeechSynthesisUtterance(String(text).replace(/\*\*/g, '').slice(0, 900));
+    u.rate = 1.05; u.onend = u.onerror = resolve;
+    window.speechSynthesis.speak(u);
+  });
+}
+function listen(input, button) {
+  if (!Recognition) return;
+  const rec = new Recognition();
+  rec.lang = 'en-US'; rec.interimResults = true; rec.maxAlternatives = 1;
+  button.classList.add('on'); button.textContent = 'Listening…';
+  rec.onresult = event => { input.value = [...event.results].map(r => r[0].transcript).join(' ').slice(0, 1000); };
+  rec.onend = () => { button.classList.remove('on'); button.textContent = 'Mic'; if (input.value.trim()) input.form.requestSubmit(); };
+  rec.onerror = () => { button.classList.remove('on'); button.textContent = 'Mic'; };
+  rec.start();
+}
+
+// Proactive notes: compare each refresh with the last one and let the right agent speak up.
+let lastSeen = null;
+function noticeChanges() {
+  if (report?.access?.admin !== true) return;
+  const f = report.kpis.funnel || {}, runway = report.kpis.runway?.months, firing = triggered().map(a => a.message);
+  const now = { range: report.range.from + '|' + report.range.to, wins: f.wins, proposals: f.proposals, runway, firing, bids: mail.stats?.bidInvitations, urgent: mail.stats?.urgentUnread };
+  const was = lastSeen;
+  lastSeen = now;
+  if (!was || was.range !== now.range) return;
+  if (now.wins > was.wins) addNote('main', plural(now.wins - was.wins, 'new win') + '. ' + number(now.wins) + ' this period.');
+  if (now.proposals > was.proposals) addNote('systems', plural(now.proposals - was.proposals, 'proposal') + ' sent since last check.');
+  if (runway != null && was.runway != null && runway < was.runway - 0.4) addNote('systems', 'Runway dropped to ' + number(runway) + ' months.');
+  for (const message of firing.filter(m => !was.firing.includes(m))) addNote('systems', 'Alert: ' + message);
+}
+function noticeMail() {
+  if (report?.access?.admin !== true || !lastSeen) return;
+  const bids = mail.stats?.bidInvitations, urgent = mail.stats?.urgentUnread;
+  if (bids != null && lastSeen.bids != null && bids > lastSeen.bids) addNote('email', plural(bids - lastSeen.bids, 'new bid invitation') + ' in the inbox.');
+  if (urgent != null && lastSeen.urgent != null && urgent > lastSeen.urgent) addNote('email', plural(urgent - lastSeen.urgent, 'new urgent email') + '.');
+  lastSeen.bids = bids; lastSeen.urgent = urgent;
+}
+function addNote(id, text) {
+  notes.unshift({ id, text, at: new Date() });
+  notes.length = Math.min(notes.length, 12);
+  map.agentSay?.(id, text, 15000);
+  if (selected === 'agent:' + id) { const agent = cityAgents().find(a => a.id === id); if (agent) agentPanel(agent); }
+}
+
+function agentMessage(message, agent) {
   const item = node('div', undefined, 'agent-msg ' + message.role + (message.error ? ' error' : ''));
   for (const line of String(message.content || '').split('\n').map(l => l.trim()).filter(Boolean)) item.append(node('p', line.replace(/\*\*/g, '')));
   if (message.note) item.append(node('small', message.note));
+  if (message.plan) item.append(planCard(message, agent));
+  if (message.id && message.role === 'assistant' && !message.error) item.append(rateBar(message, agent));
   return item;
 }
+// Teach from the city: the same feedback the JARVIS tab sends.
+function rateBar(message, agent) {
+  const bar = node('div', undefined, 'agent-rate');
+  const chat = chatFor(agent.id);
+  const send = async (rating, note) => {
+    try {
+      const response = await fetch('/api/jarvis-memory', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ role: agent.id, action: 'feedback', threadId: chat.threadId, messageId: message.id, rating, ...(note ? { note } : {}) }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Feedback not saved.');
+      message.rating = rating; message.rated = note ? 'Correction saved. ' + agent.name + ' will use it.' : rating > 0 ? 'Saved as helpful.' : 'Saved.';
+    } catch (error) { message.rated = error.message; }
+    if (selected === 'agent:' + agent.id) agentPanel(agent);
+  };
+  if (message.rated) { bar.append(node('small', message.rated)); return bar; }
+  const good = node('button', '▲ Helpful'); good.type = 'button';
+  const bad = node('button', '▼ Needs work'); bad.type = 'button';
+  good.addEventListener('click', () => send(1));
+  bad.addEventListener('click', () => {
+    const form = node('form', undefined, 'agent-teach');
+    const input = node('input'); input.maxLength = 300; input.placeholder = 'What should it do differently?';
+    const go = node('button', 'Teach'); go.type = 'submit';
+    form.append(input, go);
+    form.addEventListener('submit', event => { event.preventDefault(); send(-1, input.value.trim()); });
+    bar.replaceChildren(form); input.focus();
+  });
+  bar.append(good, bad);
+  return bar;
+}
+// Development plans: approve (run in the sandbox) or reject (teaches the agent) right in the city.
+function planCard(message, agent) {
+  const box = node('div', undefined, 'agent-plan');
+  box.append(node('strong', 'Plan: ' + (message.plan.task || 'change')));
+  const steps = node('ol');
+  for (const step of message.plan.steps || []) steps.append(node('li', step.action + (step.module ? ': ' + step.module : step.sql ? ': ' + step.sql.slice(0, 120) : '')));
+  box.append(steps, node('small', message.approved === false ? 'QC rejected this plan.' : message.approved === true ? 'QC approved this plan.' : 'Not reviewed by QC yet.'));
+  if (!message.planHash) return box;
+  const out = node('div', undefined, 'agent-plan-out');
+  if (message.runResult) out.append(node('p', message.runResult));
+  const run = node('button', 'Approve and run in sandbox', 'primary'); run.type = 'button';
+  const reject = node('button', 'Reject'); reject.type = 'button';
+  run.addEventListener('click', async () => {
+    if (!confirm('Run this plan in the sandbox? It uses a throwaway copy of A2Z data. Nothing is applied to production.')) return;
+    run.disabled = reject.disabled = true;
+    map.agentState?.(agent.id, 'busy');
+    try {
+      const response = await fetch('/api/jarvis-execute', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ action: 'run', plan: message.plan, planHash: message.planHash, preset: $('range').value }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Sandbox run failed.');
+      const passed = (data.checks || []).filter(c => c.ok).length;
+      message.runResult = 'Sandbox ' + data.outcome + '. ' + passed + ' of ' + (data.checks || []).length + ' checks passed. Applied to production: no.' + (data.error ? ' ' + data.error : '');
+      map.agentState?.(agent.id, data.outcome === 'passed' ? 'done' : 'error');
+      map.agentSay?.(agent.id, message.runResult);
+    } catch (error) {
+      message.runResult = error.message; map.agentState?.(agent.id, 'error');
+    }
+    if (selected === 'agent:' + agent.id) agentPanel(agent);
+  });
+  reject.addEventListener('click', () => { message.plan = null; rateBarSend(message, agent, 'Plan rejected from the city view.'); });
+  const actions = node('div', undefined, 'agent-actions');
+  actions.append(run, reject);
+  box.append(actions, out);
+  return box;
+}
+function rateBarSend(message, agent, note) {
+  const chat = chatFor(agent.id);
+  fetch('/api/jarvis-memory', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ role: agent.id, action: 'feedback', threadId: chat.threadId, messageId: message.id, rating: -1, note }) }).catch(() => {});
+  message.rated = 'Plan rejected. ' + agent.name + ' learns from it.';
+  if (selected === 'agent:' + agent.id) agentPanel(agent);
+}
+
 function agentPanel(agent) {
+  if (agent.ghost) return newBotPanel();
   $('detail').hidden = false;
   $('detail-title').textContent = agent.name;
   const panel = $('detail-content');
   panel.replaceChildren();
   const chat = chatFor(agent.id);
+  // Alerts this agent is standing on.
+  const firing = triggered().filter(a => (agent.watch || []).includes(a.district));
+  if (firing.length) {
+    const box = node('div', undefined, 'firing');
+    box.append(node('strong', firing.length === 1 ? '1 alert I am watching' : firing.length + ' alerts I am watching'));
+    for (const a of firing) {
+      const ask = node('button', a.message, 'agent-chip'); ask.type = 'button';
+      ask.addEventListener('click', () => sendToAgent(agent, 'An alert fired: ' + a.message + '. What is causing it and what should I do today?'));
+      box.append(ask);
+    }
+    panel.append(box);
+  }
+  const mine = notes.filter(n => n.id === agent.id).slice(0, 3);
+  if (mine.length) {
+    const box = node('div', undefined, 'agent-notes');
+    box.append(node('strong', 'Recent notes'));
+    for (const n of mine) box.append(node('small', n.at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + ' · ' + n.text));
+    panel.append(box);
+  }
   const log = node('div', undefined, 'agent-log');
   log.setAttribute('aria-live', 'polite');
-  log.append(node('p', agent.greeting, 'muted'), ...chat.messages.map(agentMessage));
+  log.append(node('p', agent.greeting, 'muted'), ...chat.messages.map(m => agentMessage(m, agent)));
   if (chat.busy) log.append(node('p', agent.name + ' is working…', 'muted thinking'));
   const form = node('form', undefined, 'agent-form');
   const input = node('textarea');
@@ -539,48 +717,170 @@ function agentPanel(agent) {
   input.disabled = chat.busy;
   const send = node('button', chat.busy ? 'Working…' : 'Send', 'primary'); send.type = 'submit'; send.disabled = chat.busy;
   const fresh = node('button', 'New chat'); fresh.type = 'button'; fresh.disabled = chat.busy || !chat.messages.length;
+  const mic = node('button', 'Mic'); mic.type = 'button'; mic.hidden = !Recognition; mic.disabled = chat.busy;
+  const voice = node('button', voiceOn ? 'Voice on' : 'Voice off', voiceOn ? 'on' : ''); voice.type = 'button'; voice.hidden = !window.speechSynthesis;
+  voice.setAttribute('aria-pressed', String(voiceOn));
   const full = node('a', 'Open in JARVIS'); full.href = '#jarvis'; full.className = 'agent-link';
   const actions = node('div', undefined, 'agent-actions');
-  actions.append(full, node('span'), fresh, send);
+  actions.append(full, node('span'), voice, mic, fresh, send);
   form.append(input, actions);
   input.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); const text = input.value.trim(); if (text) sendToAgent(agent, text); });
   fresh.addEventListener('click', () => { agentChats.delete(agent.id); agentPanel(agent); });
+  mic.addEventListener('click', () => listen(input, mic));
+  voice.addEventListener('click', () => {
+    voiceOn = !voiceOn; store.set('voice', voiceOn ? 'on' : 'off');
+    if (!voiceOn) window.speechSynthesis?.cancel();
+    agentPanel(agent);
+  });
   panel.append(log, form);
   log.scrollTop = log.scrollHeight;
   if (!chat.busy) input.focus({ preventScroll: true });
 }
+async function postJarvis(body) {
+  const response = await fetch('/api/jarvis', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
+  return { response, data: await response.json().catch(() => ({})) };
+}
 async function sendToAgent(agent, text) {
   const chat = chatFor(agent.id);
   if (chat.busy) return;
+  if (selected !== 'agent:' + agent.id) select('agent:' + agent.id);
   chat.messages.push({ role: 'user', content: text });
   chat.busy = true;
   map.agentState?.(agent.id, 'busy');
   const redraw = () => { if (selected === 'agent:' + agent.id) agentPanel(agent); };
   redraw();
-  const post = body => fetch('/api/jarvis', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) })
-    .then(async response => ({ response, data: await response.json().catch(() => ({})) }));
   try {
     const body = { role: agent.id, prompt: text, preset: $('range').value, ...(chat.threadId ? { threadId: chat.threadId } : { newThread: true }) };
-    let { response, data } = await post(body);
+    let { response, data } = await postJarvis(body);
     if (response.status === 404 && body.threadId) {
       delete body.threadId; body.newThread = true;
-      ({ response, data } = await post(body));
+      ({ response, data } = await postJarvis(body));
     }
     if (!response.ok) throw new Error(data.error || 'JARVIS request failed (HTTP ' + response.status + ').');
     if (data.threadId) chat.threadId = data.threadId;
-    const names = Object.fromEntries(cityAgents().map(a => [a.id, a.name]));
-    const route = (data.trace || []).filter(id => id !== agent.id).map(id => names[id] || id);
-    chat.messages.push({ role: 'assistant', content: data.answer || data.error || 'No answer.', note: [route.length ? 'Via ' + route.join(' > ') : '', data.memoryError || ''].filter(Boolean).join(' · ') });
-    map.agentState?.(agent.id, 'done');
-    if (data.agent && data.agent !== agent.id) map.agentState?.(data.agent, 'done');
+    // Delegation: a packet flies out to each agent in the trace, then the answer flies back.
+    const trace = [agent.id, ...(data.trace || []).filter(id => id !== agent.id && id !== 'execute')];
+    let delay = 0;
+    for (let i = 0; i < trace.length - 1; i++) { map.agentFlow?.(trace[i], trace[i + 1], delay); map.agentState?.(trace[i + 1], 'busy'); delay += 0.9; }
+    for (let i = trace.length - 1; i > 0; i--) { map.agentFlow?.(trace[i], trace[i - 1], delay); delay += 0.9; }
+    const route = trace.slice(1).map(agentName);
+    const message = { id: data.messageId, role: 'assistant', content: data.answer || data.error || 'No answer.',
+      note: [route.length ? 'Via ' + route.join(' > ') : '', data.memoryError || ''].filter(Boolean).join(' · '),
+      plan: data.plan && data.planHash && data.validation?.ok !== false ? data.plan : null, planHash: data.planHash, approved: data.approved };
+    setTimeout(() => {
+      chat.messages.push(message);
+      for (const id of trace.slice(1)) map.agentState?.(id, 'done');
+      map.agentState?.(agent.id, 'done');
+      map.agentSay?.(agent.id, message.plan ? 'Plan ready. Click me to approve or reject it.' : firstLine(message.content));
+      speak(message.content);
+      chat.busy = false;
+      redraw();
+    }, delay * 1000);
+    return;
   } catch (error) {
     chat.messages.push({ role: 'assistant', content: error.message || 'JARVIS request failed.', error: true });
     map.agentState?.(agent.id, 'error');
-  } finally {
-    chat.busy = false;
-    redraw();
+    map.agentSay?.(agent.id, error.message || 'Request failed.');
   }
+  chat.busy = false;
+  redraw();
+}
+
+// "Ask JARVIS about this" on every district panel.
+function askAbout(tile) {
+  const main = cityAgents().find(a => a.id === 'main');
+  if (!main || !tile) return null;
+  const button = node('button', 'Ask JARVIS about this', 'agent-ask'); button.type = 'button';
+  button.addEventListener('click', () => {
+    const firing = triggered().filter(a => a.district === tile.key).map(a => a.message);
+    const facts = [tile.value, tile.sub].filter(Boolean).join(', ');
+    const prompt = 'Look at ' + tile.title + ' on the dashboard' + (facts ? ' (' + facts + ')' : '') + ' for ' + $('range').selectedOptions[0].text.toLowerCase() + '.'
+      + (firing.length ? ' Alerts firing: ' + firing.join('; ') + '.' : '') + ' What stands out and what should I do today?';
+    sendToAgent(main, prompt.slice(0, 1000));
+  });
+  return button;
+}
+
+// Morning briefing: Systems writes one line per district, then the camera tours them while the robot reads each line.
+const TOUR = ['hq', 'leads', 'proposals', 'wins', 'pipelines', 'labor', 'workforce', 'runway', 'system', 'mail'];
+let briefing = null;
+async function runBriefing() {
+  if (briefing) { briefing.stop = true; return; }
+  const systems = cityAgents().find(a => a.id === 'systems');
+  if (!systems) return;
+  const run = briefing = { stop: false };
+  $('brief').textContent = 'Stop briefing';
+  map.agentState?.('systems', 'busy');
+  map.agentSay?.('systems', 'Pulling this morning\'s numbers…', 20000);
+  try {
+    const keys = TOUR.filter(k => k !== 'mail' || report.access?.mailbox !== false);
+    const { response, data } = await postJarvis({ role: 'systems', preset: $('range').value,
+      prompt: 'Morning briefing. Write exactly one short line for each of these keys, in this order, formatted as key: line. Keys: ' + keys.join(', ') + '. hq is the overall headline. Use numbers. No other text.' });
+    if (!response.ok) throw new Error(data.error || 'Briefing failed.');
+    map.agentState?.('systems', 'done');
+    const lines = Object.fromEntries(String(data.answer || '').split('\n').map(l => l.replace(/^[-*•\s]+/, '').match(/^([a-z]+)\s*:\s*(.+)$/i)).filter(Boolean).map(m => [m[1].toLowerCase(), m[2].replace(/\*\*/g, '').trim()]));
+    if (!keys.some(key => lines[key])) map.agentSay?.('systems', firstLine(data.answer) || 'No briefing lines came back.', 12000);
+    for (const key of keys) {
+      if (run.stop || !lines[key]) continue;
+      select(key);
+      map.agentSay?.('systems', lines[key], 9000);
+      await Promise.all([speak(lines[key]), new Promise(r => setTimeout(r, 4200))]);
+    }
+    store.set('briefed', new Date().toLocaleDateString('en-CA'));
+  } catch (error) {
+    map.agentState?.('systems', 'error'); map.agentSay?.('systems', error.message);
+  } finally {
+    briefing = null;
+    $('brief').textContent = 'Brief me';
+    if (!run.stop) { select(null); map.reset(); }
+  }
+}
+function autoBrief() {
+  if (!$('daily').checked || briefing || report?.access?.admin !== true) return;
+  const today = new Date().toLocaleDateString('en-CA');
+  if (store.get('briefed', '') !== today && new Date().getHours() >= 5) runBriefing();
+}
+
+// Custom instructions for every agent, opened from the city.
+function instructionsPanel() {
+  selected = 'instructions';
+  $('detail').hidden = false;
+  $('detail-title').textContent = 'Custom instructions';
+  const form = instructionsForm({ headers: authHeaders, onSaved: () => map.agentSay?.('main', 'Got it. I will follow your new instructions.') });
+  $('detail-content').replaceChildren(form);
+  form.load();
+}
+
+// Custom bots from the city: the ghost robot opens this form.
+function newBotPanel() {
+  $('detail').hidden = false;
+  $('detail-title').textContent = 'Create a bot';
+  const panel = $('detail-content');
+  panel.replaceChildren(node('p', 'Give it a job. JARVIS will hand it matching requests, and it gets its own robot in the city.', 'muted'));
+  const form = node('form', undefined, 'agent-form');
+  const name = node('input'); name.maxLength = 40; name.required = true; name.placeholder = 'Name, e.g. Bid Coach';
+  const description = node('input'); description.maxLength = 200; description.placeholder = 'What it is for (JARVIS uses this to delegate)';
+  const instructions = node('textarea'); instructions.maxLength = 1500; instructions.required = true; instructions.rows = 4; instructions.placeholder = 'Instructions for this bot';
+  const context = node('select');
+  context.append(new Option('A2Z metrics', 'metrics'), new Option('Mailbox snapshot', 'mail'), new Option('No data', 'none'));
+  const status = node('p', '', 'muted');
+  const create = node('button', 'Create bot', 'primary'); create.type = 'submit';
+  form.append(name, description, instructions, context, create, status);
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    create.disabled = true; status.textContent = 'Creating…';
+    try {
+      const response = await fetch('/api/jarvis-memory', { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ role: 'main', action: 'bot-create', bot: { name: name.value.trim(), description: description.value.trim(), instructions: instructions.value.trim(), context: context.value } }) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Bot not created.');
+      await loadAgentBots(true);
+      if (data.bot?.id) { select('agent:' + data.bot.id); map.agentSay?.(data.bot.id, 'Hi, I am ' + data.bot.name + '. Ask me anything in my lane.'); }
+    } catch (error) { status.textContent = error.message; create.disabled = false; }
+  });
+  panel.append(form);
+  name.focus({ preventScroll: true });
 }
 
 async function refresh() {
@@ -641,6 +941,9 @@ async function refresh() {
     alertBadge();
     select(selected, true, worker);
     loadAgentBots();
+    for (const id of ['brief', 'instructions', 'daily-label']) $(id).hidden = report.access?.admin !== true;
+    noticeChanges();
+    autoBrief();
     lastLoad = Date.now();
     if (firstLoad || !hadMailbox) updateMail();
   } catch (error) {
@@ -674,6 +977,10 @@ $('signin').addEventListener('submit', event => {
   refresh().then(() => { if (!$('settings').hidden) loadAlerts(); });
 });
 $('reset').addEventListener('click', () => { select(null); map.reset(); });
+$('brief').addEventListener('click', () => runBriefing());
+$('instructions').addEventListener('click', () => instructionsPanel());
+$('daily').checked = store.get('daily', 'off') === 'on';
+$('daily').addEventListener('change', () => { store.set('daily', $('daily').checked ? 'on' : 'off'); if ($('daily').checked) autoBrief(); });
 $('close').addEventListener('click', () => select(null));
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && selected) select(null); });
 

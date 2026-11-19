@@ -5,14 +5,18 @@ import { groqReasoningOptions } from './groq.mjs';
 import { catalogText, validatePlan } from './jarvis-sandbox.mjs';
 
 export const JARVIS_MODEL = 'openai/gpt-oss-20b';
-export const builtinRoles = ['main', 'email', 'systems', 'build', 'qc'];
-export const agentNames = { main: 'Main dispatcher', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC' };
-export const rolePattern = /^(?:main|email|systems|build|qc|bot-[a-z0-9-]{2,24})$/;
+export const builtinRoles = ['main', 'email', 'systems', 'build', 'qc', 'gemini', 'cloudflare'];
+export const GEMINI_MODEL = 'gemini-2.5-flash';
+export const CLOUDFLARE_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+export const agentNames = { main: 'Main dispatcher', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI' };
+export const rolePattern = /^(?:main|email|systems|build|qc|gemini|cloudflare|bot-[a-z0-9-]{2,24})$/;
 const descriptions = {
   email: 'Reads the A2Z mailbox snapshot: unread mail, bid invitations, invoices, crew requests, deadlines and follow-ups.',
   systems: 'A2Z KPIs and system health: leads, proposals, wins, pipelines, labor, containers, workforce, runway, feeds, deploys, Twilio, Make and Netlify credits.',
   build: 'Development: designs a sandbox execution plan (SQL views, module bindings, refresh schedules) for a dashboard change. QC reviews it automatically.',
   qc: 'Independent review of an execution plan or proposed change.',
+  gemini: 'Google Gemini: a second opinion, longer writing (emails, scopes, proposals, summaries) and general questions, with A2Z metrics as context.',
+  cloudflare: 'Cloudflare Workers AI (Llama): fast low cost drafts, brainstorming, rewrites and a third opinion, with A2Z metrics as context.',
 };
 
 const boundary = 'You are part of JARVIS, the operator\'s assistant for A2Z Construction Services, a demolition and labor subcontractor in Southern California. ' +
@@ -109,6 +113,79 @@ export function groqModel(key, fetchImpl = fetch, { model = JARVIS_MODEL, usage 
   return call;
 }
 
+// One Gemini generateContent call with the same call shape as groqModel: (instruction, context, structured, guidance).
+// Env: GEMINI_API_KEY (required for the Gemini agent), GEMINI_MODEL (optional, default gemini-2.5-flash).
+export function geminiModel(key, fetchImpl = fetch, { model = GEMINI_MODEL, usage = { total: 0, calls: 0 } } = {}) {
+  const call = async (instruction, context, structured = false, guidance = null) => {
+    const history = Array.isArray(guidance?.history) ? guidance.history : [];
+    const system = [boundary + instruction, guidance?.shared, guidance?.memory].filter(Boolean).join('\n\n');
+    const contents = [...history.map(turn => ({ role: turn.role === 'assistant' ? 'model' : 'user', parts: [{ text: String(turn.content || '') }] })),
+      { role: 'user', parts: [{ text: JSON.stringify(context) }] }];
+    const response = await fetchImpl('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(25000),
+      headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents,
+        generationConfig: { temperature: 0.3, maxOutputTokens: 2048, ...(structured ? { responseMimeType: 'application/json' } : {}) },
+      }),
+    });
+    if (!response.ok) {
+      if (response.status === 429) { await response.body?.cancel(); throw failure('Gemini quota reached. Retry after the limit resets.', 429); }
+      let info = {};
+      try { info = JSON.parse(await boundedResponse(response, 16384))?.error || {}; } catch { /* body is optional */ }
+      const detail = typeof info.status === 'string' ? ', ' + info.status.slice(0, 40) : '';
+      const message = typeof info.message === 'string' ? ': ' + info.message.replace(/\s+/g, ' ').slice(0, 200) : '.';
+      throw failure('Gemini request failed (HTTP ' + response.status + detail + ')' + message);
+    }
+    const payload = JSON.parse(await boundedResponse(response, 262144));
+    usage.calls++;
+    if (Number.isFinite(payload.usageMetadata?.totalTokenCount)) usage.total += payload.usageMetadata.totalTokenCount;
+    const candidate = payload.candidates?.[0];
+    const content = (candidate?.content?.parts || []).map(part => (typeof part.text === 'string' ? part.text : '')).join('').trim();
+    if (!content) throw failure(candidate?.finishReason === 'SAFETY' ? 'Gemini declined to answer this request.' : 'Gemini returned an empty answer.');
+    if (!structured) return content.replace(/[–—]/g, '-').trim().slice(0, 5500);
+    try { return JSON.parse(content.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { throw failure('Gemini returned invalid JSON.'); }
+  };
+  call.usage = usage;
+  return call;
+}
+
+// Cloudflare Workers AI through its OpenAI compatible endpoint. Same call shape as groqModel.
+// Env: CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_TOKEN (Workers AI read/run token), CLOUDFLARE_AI_MODEL (optional).
+export function cloudflareModel(accountId, token, fetchImpl = fetch, { model = CLOUDFLARE_MODEL, usage = { total: 0, calls: 0 } } = {}) {
+  if (!/^[a-f0-9]{32}$/i.test(accountId)) throw failure('CLOUDFLARE_ACCOUNT_ID must be the 32 character account ID.', 503);
+  const call = async (instruction, context, structured = false, guidance = null) => {
+    const history = Array.isArray(guidance?.history) ? guidance.history : [];
+    const system = [boundary + instruction, guidance?.shared, guidance?.memory].filter(Boolean).join('\n\n');
+    const response = await fetchImpl('https://api.cloudflare.com/client/v4/accounts/' + accountId + '/ai/v1/chat/completions', {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(25000),
+      headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model, temperature: 0.3, max_tokens: 1500,
+        ...(structured ? { response_format: { type: 'json_object' } } : {}),
+        messages: [{ role: 'system', content: system }, ...history, { role: 'user', content: JSON.stringify(context) }],
+      }),
+    });
+    if (!response.ok) {
+      if (response.status === 429) { await response.body?.cancel(); throw failure('Workers AI quota reached. Retry after the limit resets.', 429); }
+      let info = {};
+      try { const data = JSON.parse(await boundedResponse(response, 16384)); info = data?.errors?.[0] || data?.error || {}; } catch { /* body is optional */ }
+      const message = typeof info.message === 'string' ? ': ' + info.message.replace(/\s+/g, ' ').slice(0, 200) : '.';
+      throw failure('Workers AI request failed (HTTP ' + response.status + ')' + message);
+    }
+    const payload = JSON.parse(await boundedResponse(response, 262144));
+    usage.calls++;
+    if (Number.isFinite(payload.usage?.total_tokens)) usage.total += payload.usage.total_tokens;
+    const content = payload.choices?.[0]?.message?.content;
+    if (typeof content !== 'string' || !content.trim()) throw failure('Workers AI returned an empty answer.');
+    if (!structured) return content.replace(/[–—]/g, '-').trim().slice(0, 5500);
+    try { return JSON.parse(content.replace(/^```(?:json)?\s*|\s*```$/g, '')); } catch { throw failure('Workers AI returned invalid JSON.'); }
+  };
+  call.usage = usage;
+  return call;
+}
+
 function text(value, max) {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw failure('The model returned invalid text.');
   return value.replace(/[\u2013\u2014]/g, '-').trim();
@@ -117,6 +194,8 @@ function text(value, max) {
 // Deterministic first pass so most delegations cost no extra Groq call.
 const intents = {
   email: /\b(?:e-?mails?|mail|inbox|mailbox|unread|replies|reply to|needs? a reply|awaiting (?:a )?reply|bid invitations?|invoice mail|sender|subject line)\b/i,
+  gemini: /\b(?:gemini|second opinion)\b/i,
+  cloudflare: /\b(?:cloudflare|workers ai|llama|third opinion)\b/i,
   qc: /\b(?:qc|quality check|review (?:this|the|my) (?:plan|change|proposal)|audit (?:this|the) plan)\b/i,
   build: /\b(?:build|create|develop|add (?:a|an) (?:view|module|card|panel)|module|sql|view|schedule (?:a )?refresh|execution plan|automate)\b/i,
   systems: /\b(?:kpis?|metrics?|runway|cash|burn|pipelines?|wins?|leads|proposals?|crews?|workers?|workforce|labor|containers?|twilio|make credits|netlify|deploys?|feeds?|sources?|diagnostics?|health|coverage)\b/i,
@@ -140,8 +219,8 @@ export function compileAgents(model, deps) {
   async function main(state) {
     const { prompt, previousTask } = state;
     const routed = routeIntent(prompt, deps.bots);
-    if (routed) return { target: routed, via: 'main' };
-    const agents = Object.fromEntries([...Object.entries(descriptions), ...deps.bots.map(bot => [bot.id, bot.description || bot.name])]);
+    if (routed && (routed !== 'gemini' || deps.gemini) && (routed !== 'cloudflare' || deps.cloudflare)) return { target: routed, via: 'main' };
+    const agents = Object.fromEntries([...Object.entries(descriptions).filter(([id]) => (id !== 'gemini' || deps.gemini) && (id !== 'cloudflare' || deps.cloudflare)), ...deps.bots.map(bot => [bot.id, bot.description || bot.name])]);
     const choice = await model(
       'You are the JARVIS dispatcher. Pick the one agent best suited to the operator request, or answer yourself only for greetings or questions about what JARVIS can do. ' +
       'Return JSON {"agent":"<id>"} to delegate, or {"agent":"main","answer":"<max 800 characters>"} to answer.',
@@ -211,6 +290,26 @@ export function compileAgents(model, deps) {
     return { result };
   }
 
+  async function gemini(state) {
+    if (!deps.gemini) throw failure('Set GEMINI_API_KEY to use the Gemini agent.', 503);
+    const answer = await deps.gemini(
+      'You are the Gemini agent for A2Z, a second model next to the Groq agents. Give a careful, well reasoned answer. Use the supplied A2Z report for any company figures and say when it cannot answer. ' +
+      'For writing tasks (emails, scopes, proposals) write the finished text. You cannot send messages or change systems.',
+      { request: state.prompt, previousTask: state.previousTask, report: await deps.systems().catch(() => null) }, false, await deps.guidance('gemini'),
+    );
+    return { result: { answer, trace: trace(state, 'gemini'), agent: 'gemini' } };
+  }
+
+  async function cloudflare(state) {
+    if (!deps.cloudflare) throw failure('Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN to use the Workers AI agent.', 503);
+    const answer = await deps.cloudflare(
+      'You are the Workers AI agent for A2Z, running on Cloudflare. Be fast and practical: drafts, rewrites, brainstorming and a third opinion. ' +
+      'Use the supplied A2Z report for any company figures and say when it cannot answer. You cannot send messages or change systems.',
+      { request: state.prompt, previousTask: state.previousTask, report: await deps.systems().catch(() => null) }, false, await deps.guidance('cloudflare'),
+    );
+    return { result: { answer, trace: trace(state, 'cloudflare'), agent: 'cloudflare' } };
+  }
+
   async function custom(state) {
     const id = agentFor(state);
     const bot = deps.bots.find(item => item.id === id);
@@ -225,10 +324,10 @@ export function compileAgents(model, deps) {
 
   const nodeFor = id => (id.startsWith('bot-') ? 'custom' : id);
   return new StateGraph(state)
-    .addNode('main', main).addNode('systems', systems).addNode('email', email).addNode('build', build).addNode('qc', qc).addNode('custom', custom)
-    .addConditionalEdges(START, input => nodeFor(input.role), ['main', 'systems', 'email', 'build', 'qc', 'custom'])
-    .addConditionalEdges('main', input => (input.result ? END : nodeFor(input.target)), ['systems', 'email', 'build', 'qc', 'custom', END])
+    .addNode('main', main).addNode('systems', systems).addNode('email', email).addNode('build', build).addNode('qc', qc).addNode('gemini', gemini).addNode('cloudflare', cloudflare).addNode('custom', custom)
+    .addConditionalEdges(START, input => nodeFor(input.role), ['main', 'systems', 'email', 'build', 'qc', 'gemini', 'cloudflare', 'custom'])
+    .addConditionalEdges('main', input => (input.result ? END : nodeFor(input.target)), ['systems', 'email', 'build', 'qc', 'gemini', 'cloudflare', 'custom', END])
     .addConditionalEdges('build', input => (input.proposal ? 'qc' : END), ['qc', END])
-    .addEdge('systems', END).addEdge('email', END).addEdge('qc', END).addEdge('custom', END)
+    .addEdge('systems', END).addEdge('email', END).addEdge('qc', END).addEdge('gemini', END).addEdge('cloudflare', END).addEdge('custom', END)
     .compile();
 }

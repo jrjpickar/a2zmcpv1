@@ -28,6 +28,7 @@ const { localKeyedStore } = await import('../netlify/functions/lib/local-store.m
 const { createJarvisHandler } = await import('../netlify/functions/jarvis.mjs');
 const { createJarvisMemoryHandler } = await import('../netlify/functions/jarvis-memory.mjs');
 const { createExecuteHandler } = await import('../netlify/functions/jarvis-execute.mjs');
+const { createInstructionsHandler } = await import('../netlify/functions/jarvis-instructions.mjs');
 const { mailSettings, syncMailbox } = await import('../netlify/functions/lib/jarvis-mail.mjs');
 
 const supabase = Boolean(env.SUPABASE_URL?.trim() && env.SUPABASE_SERVICE_ROLE_KEY?.trim());
@@ -46,6 +47,7 @@ for (const file of (await readdir(functionsDir)).filter(name => name.endsWith('.
 routes['/api/jarvis'] = createJarvisHandler({ openStore });
 routes['/api/jarvis-memory'] = createJarvisMemoryHandler({ openStore });
 routes['/api/jarvis-execute'] = createExecuteHandler({ openStore });
+routes['/api/jarvis-instructions'] = createInstructionsHandler({ openStore });
 const bodyLimits = { '/api/jarvis': 16384, '/api/jarvis-memory': 8192, '/api/jarvis-execute': 16384, '/mcp': 16384 };
 
 // Same response headers as netlify.toml.
@@ -55,7 +57,7 @@ const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; connect-src 'self'; style-src 'self'; frame-ancestors 'self' https://app.gohighlevel.com https://app.leadconnectorhq.com",
 };
 const types = { html: 'text/html; charset=utf-8', js: 'application/javascript', mjs: 'application/javascript', css: 'text/css' };
-const staticFiles = new Set(['index.html', 'app.js', 'map.js', 'city3d.js', 'styles.css', 'jarvis.mjs']);
+const staticFiles = new Set(['index.html', 'app.js', 'map.js', 'city3d.js', 'styles.css', 'jarvis.mjs', 'instructions.mjs', 'voice.js', 'voice-vad.js', 'voice.css', 'voice-launch.js', 'voice.html']);
 const started = Date.now();
 const digest = value => createHash('sha256').update(value).digest();
 const tokenMatches = value => timingSafeEqual(digest(value), digest(token));

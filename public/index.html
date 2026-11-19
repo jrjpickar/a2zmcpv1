@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#101311">
   <title>A2Z Operations</title>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/voice.css">
   <script src="/city3d.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
@@ -38,6 +39,7 @@
       </div>
       <p class="hint">Drag to turn. Click a building, a worker, or a JARVIS robot to talk to it.</p>
       <button type="button" id="reset" class="float">Reset view</button>
+      <div id="brief-bar" class="float brief-bar"><button type="button" id="brief">Brief me</button><button type="button" id="instructions">Instructions</button><label id="daily-label"><input type="checkbox" id="daily"> Daily</label><button type="button" id="call-brain">Call Brain</button></div>
       <aside id="detail" class="detail" aria-labelledby="detail-title" hidden>
         <button type="button" id="close" class="close" aria-label="Close">×</button>
         <h2 id="detail-title"></h2>
@@ -79,5 +81,9 @@
     </section>
     <section id="jarvis" class="settings" aria-label="JARVIS" hidden></section>
   </main>
+  <dialog id="voice-dialog" aria-labelledby="voice-title">
+    <button type="button" id="voice-close" aria-label="Close call">×</button>
+    <div id="voice-panel"></div>
+  </dialog>
 </body>
 </html>

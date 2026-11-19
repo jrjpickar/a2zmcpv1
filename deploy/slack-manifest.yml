@@ -1,0 +1,33 @@
+# Slack app manifest for the JARVIS bot user. api.slack.com/apps > Create New App > From a manifest.
+# Replace YOUR-OPERATIONS-SITE with the A2Z Operations Netlify domain before pasting.
+display_information:
+  name: JARVIS
+  description: A2Z Operations assistant. Ask about KPIs, mail, plans, or get a second opinion from Gemini.
+  background_color: "#1c1309"
+features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: JARVIS
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - im:history
+      - im:read
+      - reactions:read
+      - reactions:write
+settings:
+  event_subscriptions:
+    request_url: https://YOUR-OPERATIONS-SITE/api/slack/events
+    bot_events:
+      - app_mention
+      - message.im
+      - reaction_added
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

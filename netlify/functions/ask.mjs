@@ -1,3 +1,4 @@
+import { voice } from './voice.mjs';
 import { dashboardAccess } from './lib/dashboard-auth.mjs';
 import { json } from './lib/http.mjs';
 import { report } from './lib/report.mjs';
@@ -5,7 +6,9 @@ import { ask } from './lib/groq.mjs';
 import { evaluate, loadSettings } from './lib/alerts.mjs';
 
 // POST /api/ask { question?, preset? }. No question returns the HQ overview. Needs the dashboard key: every call can spend Groq tokens.
-export default async (request, { fetchImpl = fetch, store } = {}) => {
+export default async (request, context = {}) => {
+  if (request.headers.has('x-a2z-voice')) return voice(request, context, true);
+  const { fetchImpl = fetch, store } = context;
   if (request.method !== 'POST') return json({ error: 'POST required' }, 405, { Allow: 'POST' });
   const access = dashboardAccess(request);
   if (!access) return json({ error: 'Dashboard key required' }, 401);

@@ -13,8 +13,8 @@ const tool = {
   } },
 };
 
-export default async request => {
-  if (!authorized(request, process.env.MCP_KEY, 'authorization')) {
+export default async (request, { env = process.env } = {}) => {
+  if (!authorized(request, env.MCP_KEY, 'authorization')) {
     return json({ error: 'Unauthorized' }, 401, { 'WWW-Authenticate': 'Bearer' });
   }
   if (request.method !== 'POST') return json({ error: 'POST required' }, 405, { Allow: 'POST' });
@@ -40,7 +40,7 @@ export default async request => {
     case 'tools/call': {
       if (msg.params?.name !== tool.name) return fail(-32602, 'Unknown tool');
       try {
-        const data = await report(msg.params.arguments ?? {});
+        const data = await report(msg.params.arguments ?? {}, env);
         return respond({ content: [{ type: 'text', text: JSON.stringify(data) }], structuredContent: data });
       } catch (error) {
         return respond({ content: [{ type: 'text', text: error instanceof RangeError ? error.message : 'Report unavailable' }], isError: true });

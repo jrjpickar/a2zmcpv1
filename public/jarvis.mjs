@@ -1,12 +1,14 @@
 // A2Z JARVIS panel: per-agent saved chats, learning, company memory, custom bots and the execution sandbox.
 // Text nodes only. No inline styles (the site CSP is style-src 'self').
-const builtins = { main: 'Main (delegates)', email: 'Email', systems: 'Systems and KPIs', build: 'Development + QC', qc: 'QC' };
+const builtins = { main: 'Main (delegates)', email: 'Email', systems: 'Systems and KPIs', build: 'Development + QC', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI' };
 const greetings = {
   main: 'JARVIS online. Ask anything. I will hand it to Email, Systems, Development or one of your bots.',
   email: 'Email agent online. Ask about unread mail, bid invitations, invoices and deadlines.',
   systems: 'Systems and KPIs online. Ask about leads, wins, pipelines, crews, runway or system health.',
   build: 'Development online. Describe a dashboard change. I draft a sandbox plan and QC checks it before you run it.',
   qc: 'QC online. Paste a plan with /execute first, or ask me to review a change.',
+  gemini: 'Gemini online. Second opinions, longer writing and general questions, with A2Z numbers as context.',
+  cloudflare: 'Workers AI online (Cloudflare, Llama). Fast drafts, rewrites, brainstorming and a third opinion.',
 };
 const suggestions = {
   main: ['What needs my attention today?', 'Any bid invitations in the inbox?'],
@@ -14,8 +16,10 @@ const suggestions = {
   systems: ['Review KPI changes and give me the top three actions.', 'Which data source has the weakest coverage?'],
   build: ['Build a view of won value by pipeline and bind it to the pipelines module.'],
   qc: ['What should a good execution plan include?'],
+  gemini: ['Give me a second opinion on this month\'s numbers.', 'Draft a follow-up email for a bid we sent last week.'],
+  cloudflare: ['Brainstorm 5 ways to win more container sales.', 'Rewrite this bid follow-up to sound friendlier.'],
 };
-const traceNames = { main: 'Main', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC', execute: 'Execute (validation only)' };
+const traceNames = { main: 'Main', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI', execute: 'Execute (validation only)' };
 const sourceLabels = { manual: 'Instruction', correction: 'Correction', praise: 'Keep doing' };
 const pct = value => (value === null || value === undefined ? 'n/a' : Math.round(value * 100) + '%');
 
@@ -62,6 +66,8 @@ function table(rows) {
     node('tbody', {}, ...rows.map(row => node('tr', {}, ...cols.map(c => node('td', {}, row[c] === null ? '' : String(row[c]))))))));
 }
 
+import { instructionsForm } from './instructions.mjs';
+
 export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   let role = 'main', threadId = null, messages = [], threads = [], learned = null, shared = [], bots = [], busy = false, loadToken = 0, query = '';
 
@@ -95,9 +101,12 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   const composer = node('form', { className: 'jarvis-composer' }, prompt, send);
   const chat = node('div', { className: 'jarvis-chat' }, log, chips, composer);
   const learning = node('details', { className: 'surface jarvis-learning', id: 'jarvis-learning' });
+  const instructions = instructionsForm({ headers });
+  const instructionsBox = node('details', { className: 'surface jarvis-learning', id: 'jarvis-instructions', ontoggle: () => { if (instructionsBox.open) instructions.load(); } },
+    node('summary', {}, 'Custom instructions'), instructions);
   const panel = node('div', { className: 'jarvis' },
     node('div', { className: 'jarvis-head' }, node('h1', {}, 'JARVIS'), roleSelect, badge, exportButton),
-    node('div', { className: 'jarvis-layout' }, sidebar, chat), status, learning);
+    node('div', { className: 'jarvis-layout' }, sidebar, chat), status, instructionsBox, learning);
 
   function renderRoles() {
     roleSelect.replaceChildren(...Object.entries(builtins).map(([id, label]) => new Option(label, id)),

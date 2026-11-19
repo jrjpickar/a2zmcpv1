@@ -1,0 +1,19 @@
+#call-brain { border-color: var(--accent); color: var(--accent); }
+#voice-dialog, .voice-page {
+  width: min(40rem, calc(100% - 2rem)); padding: clamp(1rem, 4vw, 2rem);
+  border: 1px solid var(--line); border-radius: 14px; background: #131814; color: #f3f0ea;
+}
+#voice-dialog { max-height: calc(100% - 2rem); }
+#voice-dialog::backdrop { background: #080a08b8; }
+#voice-close { float: right; min-width: 44px; }
+.voice-page { margin: 2rem auto; }
+#voice-panel h1 { margin: 0 0 .65rem; font-size: 1.65rem; }
+#voice-panel button { min-height: 44px; }
+.voice-controls { display: flex; gap: .45rem; flex-wrap: wrap; }
+.voice-meta { display: flex; gap: .65rem; flex-wrap: wrap; color: #b8c0b8; font-size: .875rem; }
+.voice-option { display: inline-flex; align-items: center; gap: .4rem; min-height: 44px; }
+.voice-log { min-height: 6rem; max-height: min(28dvh, 15rem); overflow: auto; overflow-wrap: anywhere; }
+.voice-log p { margin: 0 0 .75rem; }
+.voice-log strong { color: var(--accent); }
+.voice-text > div { display: flex; gap: .5rem; margin-top: .4rem; }
+.voice-text input { flex: 1; min-width: 0; font-size: max(1rem, 16px); }

@@ -16,7 +16,7 @@ const alerts = { settings: defaults(), alerts: [], metrics, canEdit: true };
 const health = await diagnostics({ env: { DATA_MODE: 'sample', GROQ_API_KEY: 'x', DASHBOARD_KEY: 'x' } });
 health.checks.push({ id: 'blobs', group: 'Services', label: 'Netlify Blobs (alert settings)', status: 'ok', detail: 'Settings store reachable', ms: 41, checkedAt: health.generatedAt },
   { id: 'alerts', group: 'Services', label: 'Alert scheduler (every 15 min)', status: 'setup', detail: 'No alert rules enabled', ms: null, checkedAt: null, records: { rulesEnabled: 0, webhook: 'hook.us2.make.com', cooldownMinutes: 240 } });
-const [html, css, city, map, app] = await Promise.all(['index.html', 'styles.css', 'city3d.js', 'map.js', 'app.js'].map(read));
+const [html, css, city, map, app, instructions, voiceJs, voiceCss] = await Promise.all(['index.html', 'styles.css', 'city3d.js', 'map.js', 'app.js', 'instructions.mjs', 'voice.js', 'voice.css'].map(read));
 const stub = `const SAMPLE = ${JSON.stringify(reports)};
 try { sessionStorage.getItem('x'); } catch { Object.defineProperty(window, 'sessionStorage', { value: { getItem() { return ''; }, setItem() {}, removeItem() {} } }); }
 const ALERTS = ${JSON.stringify(alerts)};
@@ -66,10 +66,11 @@ const sandboxRequest = async (url, init = {}) => {
 const page = html.replace('<!doctype html>', '<!DOCTYPE html>')
   .replace('<title>A2Z Operations</title>', '<title>A2Z Operations Sandbox</title>')
   .replace('<link rel="stylesheet" href="/styles.css">', () => '<style>' + css + '</style>')
+  .replace('<link rel="stylesheet" href="/voice.css">', () => '<style>' + voiceCss + '</style>')
   .replace('<script src="/city3d.js"></script>', () => '<script>' + safe(city) + '</script>')
   .replace('<p id="status"', '<button type="button" id="demo-mail">Simulate delivery</button><p id="status"')
   .replace('<script type="module" src="/app.js"></script>', '')
-  .replace('</body>', () => '<script type="module">' + safe(stub + '\n' + map.replace(/^export /gm, '') + '\n' + app.replace(/^import .*\n/m, '').replace(/\bfetch\(/g, 'sandboxRequest(')
+  .replace('</body>', () => '<script type="module">' + safe(stub + '\n' + map.replace(/^export /gm, '') + '\n' + voiceJs.replace(/^export /gm, '').replace(/\bfetch\(/g, 'sandboxRequest(') + '\n' + instructions.replace(/^export /gm, '').replace(/\bfetch\(/g, 'sandboxRequest(') + '\n' + app.replace(/^import .*\n/gm, '').replace(/\bfetch\(/g, 'sandboxRequest(')
       .replace('refresh().then(route);', "refresh().then(() => { route(); select('mail'); });")
       + "\ndocument.getElementById('demo-mail').addEventListener('click', () => { select('mail'); updateMail(); });" ) + '</script>\n</body>');
 await mkdir(dirname(out), { recursive: true });

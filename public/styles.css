@@ -316,3 +316,48 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
 .agent-actions { display: flex; align-items: center; gap: 8px; }
 .agent-actions span { flex: 1; }
 .agent-link { color: var(--accent); font-size: .8rem; }
+.brief-bar { left: 120px; display: flex; align-items: center; gap: 8px; padding: 0; background: none; backdrop-filter: none; }
+.brief-bar button { font-size: .76rem; background: #10142bd9; backdrop-filter: blur(5px); }
+.brief-bar label { display: flex; align-items: center; gap: 5px; color: #c9c3ef; font-size: .74rem; }
+.brief-bar input { width: 14px; height: 14px; padding: 0; accent-color: var(--accent); }
+.c3-bubbles { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 2; }
+.c3-bubble { --c: var(--accent); position: absolute; left: 0; top: 0; max-width: 240px; padding: 7px 10px; border: 1px solid var(--c); border-radius: 12px; background: #0d1126ee; color: #f4f1ff; font-size: .74rem; line-height: 1.35; white-space: normal; box-shadow: 0 8px 22px #000a, 0 0 18px color-mix(in srgb, var(--c) 35%, transparent); animation: bubble-in .25s ease-out; }
+.c3-bubble::after { content: ""; position: absolute; left: 50%; bottom: -6px; width: 10px; height: 10px; background: #0d1126; border-right: 1px solid var(--c); border-bottom: 1px solid var(--c); transform: translateX(-50%) rotate(45deg); }
+@keyframes bubble-in { from { opacity: 0; translate: 0 6px; } to { opacity: 1; translate: 0 0; } }
+.agent-ask { width: 100%; margin-bottom: 10px; border-color: var(--accent); color: var(--accent); background: #e6b0721a; font-weight: 650; }
+.agent-chip { display: block; width: 100%; margin-top: 6px; text-align: left; font-size: .78rem; }
+.agent-notes { display: grid; gap: 4px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid #2f2c55; border-radius: 10px; background: #ffffff06; }
+.agent-notes small { color: var(--dim); }
+.agent-rate { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.agent-rate button { padding: 3px 8px; font-size: .72rem; }
+.agent-rate small { margin-top: 0; }
+.agent-teach { display: flex; gap: 6px; width: 100%; }
+.agent-teach input { flex: 1; min-width: 0; padding: 5px 8px; font-size: .78rem; }
+.agent-teach button { padding: 5px 9px; font-size: .74rem; }
+.agent-plan { display: grid; gap: 6px; margin-top: 8px; padding: 9px; border: 1px solid #46e08a66; border-radius: 10px; background: #46e08a0d; }
+.agent-plan ol { margin: 0; padding-left: 18px; font-size: .8rem; }
+.agent-plan .agent-actions button { padding: 6px 10px; font-size: .76rem; }
+.agent-actions button.on { border-color: var(--accent); color: var(--accent); }
+.agent-form input, .agent-form select { width: 100%; }
+@media (max-width: 720px) { .brief-bar { left: auto; right: 16px; } }
+.brief-bar[hidden] { display: none; }
+.instr-form { display: grid; gap: 12px; }
+.instr-form > p { margin: 0; line-height: 1.45; }
+.instr-field { display: grid; gap: 5px; font-size: .84rem; font-weight: 650; }
+.instr-field textarea { width: 100%; min-height: 110px; resize: vertical; font: inherit; font-weight: 400; color: inherit; border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; background: #1c221d; }
+.instr-count { justify-self: end; font-weight: 400; }
+.instr-toggle { display: flex; align-items: center; gap: 8px; font-size: .84rem; }
+.instr-toggle input { width: 16px; height: 16px; padding: 0; accent-color: var(--accent); }
+.instr-actions { display: flex; justify-content: flex-end; }
+#jarvis-instructions .instr-form { margin-top: 10px; max-width: 760px; }
+.agent-form .agent-actions { flex-wrap: wrap; gap: 6px; }
+.agent-form .agent-actions button { padding: 6px 10px; font-size: .78rem; }
+.agent-form .agent-actions .agent-link { order: 9; flex-basis: 100%; white-space: nowrap; }
+.brief-bar { z-index: 4; }
+.brief-bar label { padding: 6px 9px; border: 1px solid var(--line); border-radius: 9px; background: #10142bd9; backdrop-filter: blur(5px); }
+@media (max-width: 720px) {
+  .c3-label.agent.tag { display: grid; }
+  .c3-bubble { max-width: 180px; font-size: .7rem; }
+}
+.brief-bar label[hidden], .brief-bar button[hidden] { display: none; }
+.brief-bar #call-brain { font-weight: 650; }

@@ -1,7 +1,8 @@
 // POST /api/jarvis { role, prompt, threadId?, newThread?, previousTask?, preset?, plan? }
 // Admin dashboard access, same origin and JSON required. Without threadId/newThread the call is stateless and touches no chat storage.
-import { compileAgents, failure, groqModel, JARVIS_MODEL, agentNames, builtinRoles, rolePattern } from './lib/jarvis-agents.mjs';
+import { cloudflareModel, CLOUDFLARE_MODEL, compileAgents, failure, geminiModel, GEMINI_MODEL, groqModel, JARVIS_MODEL, agentNames, builtinRoles, rolePattern } from './lib/jarvis-agents.mjs';
 import { createMemory, guidanceFor, historyFor, limits, openJarvisStore, sharedFor, validId } from './lib/jarvis-memory.mjs';
+import { INSTRUCTIONS_KEY, instructionsText } from './jarvis-instructions.mjs';
 import { guard, readBody } from './lib/jarvis-http.mjs';
 import { mailboxContext } from './lib/jarvis-mail.mjs';
 import { summarize, validatePlan } from './lib/jarvis-sandbox.mjs';
@@ -121,7 +122,9 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     }
 
     const key = env.GROQ_API_KEY;
-    if (!key) return json({ error: 'Set GROQ_API_KEY to use JARVIS agents.' }, 503);
+    const geminiKey = env.GEMINI_API_KEY?.trim();
+    const cfAccount = env.CLOUDFLARE_ACCOUNT_ID?.trim(), cfToken = env.CLOUDFLARE_AI_TOKEN?.trim();
+    if (!key && !(role === 'gemini' && geminiKey) && !(role === 'cloudflare' && cfAccount && cfToken)) return json({ error: 'Set GROQ_API_KEY to use JARVIS agents.' }, 503);
     if (running) return json({ error: 'JARVIS is processing another task. Retry shortly.' }, 429);
     running = true;
     try {
@@ -129,18 +132,22 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       const model = groqModel(key, fetchImpl, { model: env.JARVIS_GROQ_MODEL?.trim() || JARVIS_MODEL, usage });
       const budget = Math.min(20000, Math.max(1000, Number(env.JARVIS_HISTORY_CHARS) || limits.historyBudget));
       const history = memory ? historyFor(thread, budget) : [];
-      const sharedText = sharedFor(shared);
+      let custom = '';
+      try { custom = instructionsText((await (store || await openStore()).getWithMetadata(INSTRUCTIONS_KEY))?.data); } catch { /* instructions are optional */ }
+      const sharedText = [custom, sharedFor(shared)].filter(Boolean).join('\n\n');
       const learnedCache = new Map([[requestedRole, learned]]);
       let systems;
       const deps = {
         bots,
+        cloudflare: cfAccount && cfToken ? cloudflareModel(cfAccount, cfToken, fetchImpl, { model: env.CLOUDFLARE_AI_MODEL?.trim() || CLOUDFLARE_MODEL, usage }) : null,
+        gemini: geminiKey ? geminiModel(geminiKey, fetchImpl, { model: env.GEMINI_MODEL?.trim() || GEMINI_MODEL, usage }) : null,
         systems: () => (systems ??= readSystems(preset).catch(() => { throw failure('A2Z metrics are unavailable right now.', 502); })),
         mail: async () => {
           if (!access.mailbox) throw failure('Mailbox access is not enabled for this sign-in.', 403);
           return readMail ? readMail() : mailboxContext({ env, fetchImpl, store });
         },
         guidance: async id => {
-          if (!memory) return null;
+          if (!memory) return custom ? { shared: custom, history } : null;
           if (id === 'shared') return { shared: sharedText, history };
           if (!learnedCache.has(id)) learnedCache.set(id, await memory.getMemory(id));
           return { shared: sharedText, memory: guidanceFor(id, learnedCache.get(id), prompt), history };

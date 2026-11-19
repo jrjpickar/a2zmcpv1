@@ -81,7 +81,9 @@ export function mount(container, opts = {}) {
   S.traffic = new THREE.Group(); scene.add(S.traffic); S.cars = []; S.crewPos = new Map();
   S.mailFlights = new THREE.Group();
   S.mailArrivals = [];
-  S.agentStates = new Map(); S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {};
+  S.agentStates = new Map(); S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {}; S.agentPos = {}; S.agentSize = {};
+  S.bubbles = new Map(); S.packets = []; S.packetGroup = new THREE.Group(); scene.add(S.packetGroup);
+  S.bubbleLayer = document.createElement('div'); S.bubbleLayer.className = 'c3-bubbles'; container.appendChild(S.bubbleLayer);
   S.reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   scene.add(S.mailFlights);
   resize();
@@ -96,14 +98,15 @@ export function mount(container, opts = {}) {
     if (hit) S.opts.onSelect?.(hit.key, hit.worker);
   });
   loop();
-  return { update, select, reset, unmount, drive, deliverMail, agentState };
+  return { update, select, reset, unmount, drive, deliverMail, agentState, agentSay, agentFlow };
 }
 
 export function unmount() {
   if (!S) return;
   cancelAnimationFrame(S.frame); S.ro?.disconnect();
   S.scene.traverse(dispose);
-  S.renderer.dispose(); S.renderer.domElement.remove(); S.labels.remove();
+  for (const b of S.bubbles.values()) clearTimeout(b.timer);
+  S.renderer.dispose(); S.renderer.domElement.remove(); S.labels.remove(); S.bubbleLayer.remove();
   S = null;
 }
 function dispose(o) { o.geometry?.dispose?.(); if (o.material) [].concat(o.material).forEach(m => m.dispose()); }
@@ -307,54 +310,131 @@ function hq(city, report) {
 // JARVIS agents: one robot per agent on an inner ring around HQ, between the district roads. Click one to prompt it.
 // agents: [{ id, name, color }]. Key is 'agent:<id>'. agentState(id, 'idle' | 'busy' | 'done' | 'error') drives the animation.
 const AGENT_R = 7.6;
+// Which districts each agent watches. On an alert there, the agent walks to that district and raises a flag.
+const AGENT_WATCH = { email: ['mail'], systems: ['leads', 'proposals', 'wins', 'pipelines', 'labor', 'workforce', 'runway', 'system'] };
 function agentRing(city, agents) {
-  S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {};
+  S.agentSpots = {}; S.agentColors = {}; S.agentLabels = {}; S.agentPos = {}; S.agentSize = {};
   const list = (agents || []).slice(0, DISTRICTS.length);
   list.forEach((agent, i) => {
-    const key = 'agent:' + agent.id;
+    const key = 'agent:' + agent.id, ghost = Boolean(agent.ghost);
     const angle = Math.PI - (i + 0.5) * 2 * Math.PI / DISTRICTS.length;
     const x = Math.sin(angle) * AGENT_R, z = Math.cos(angle) * AGENT_R;
     const color = typeof agent.color === 'number' ? agent.color : parseInt(String(agent.color || '#ffffff').replace('#', ''), 16) || 0xffffff;
-    S.agentSpots[key] = [x, z]; S.agentColors[key] = color;
-    const lead = agent.id === 'main', size = lead ? 1.65 : 1.3;
+    S.agentColors[key] = color;
+    const lead = agent.id === 'main', size = lead ? 1.65 : ghost ? 1.1 : 1.3;
+    S.agentSize[key] = size;
+    // Alert duty: walk toward the first alerted district this agent watches.
+    const duty = !ghost && (AGENT_WATCH[agent.id] || []).find(d => S.alerts.has(d) && SPOTS[d]);
+    const post = duty ? (() => { const [dx, dz] = SPOTS[duty], a = Math.atan2(dx, dz), side = 0.9;
+      return { x: Math.sin(a) * 10.2 + Math.cos(a) * side, z: Math.cos(a) * 10.2 - Math.sin(a) * side, a }; })() : null;
     const g = new THREE.Group(); g.position.set(x, 0.2, z); g.rotation.y = angle; g.userData.key = key; city.add(g); S.clickables.push(g);
-    const pad = at(cyl(0.75 * size, 0.85 * size, 0.1, mat(0x1b2240, { roughness: 0.8 }), 28), 0, 0.05, 0); pad.castShadow = false; g.add(pad);
+    S.agentPos[key] = g.position;
+    S.agentSpots[key] = post ? [post.x, post.z] : [x, z];
+    const pad = at(cyl(0.75 * size, 0.85 * size, 0.1, mat(0x1b2240, { roughness: 0.8 }), 28), x, 0.25, z); pad.castShadow = false; city.add(pad);
     const ring = new THREE.Mesh(new THREE.TorusGeometry(0.85 * size, 0.05, 8, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55 }));
     ring.rotation.x = Math.PI / 2; ring.position.y = 0.12; g.add(ring);
     const bot = new THREE.Group(); bot.scale.setScalar(size); g.add(bot);
-    const shell = mat(0xe9edf7, { roughness: 0.35, metalness: 0.25 }), trim = mat(color, { roughness: 0.4, emissive: color, emissiveIntensity: 0.25 });
-    const eye = new THREE.MeshBasicMaterial({ color });
+    const ghostOpts = ghost ? { transparent: true, opacity: 0.35 } : {};
+    const shell = mat(0xe9edf7, { roughness: 0.35, metalness: 0.25, ...ghostOpts }), trim = mat(color, { roughness: 0.4, emissive: color, emissiveIntensity: 0.25, ...ghostOpts });
+    const eye = new THREE.MeshBasicMaterial({ color, ...ghostOpts });
     bot.add(at(cyl(0.3, 0.22, 0.5, trim, 18), 0, 0.62, 0));
     bot.add(at(cyl(0.31, 0.31, 0.06, shell, 18), 0, 0.88, 0));
-    const chest = at(box(0.2, 0.12, 0.04, glow(color, 0.9)), 0, 0.66, 0.29); chest.castShadow = false; bot.add(chest);
+    const chest = at(box(0.2, 0.12, 0.04, ghost ? trim : glow(color, 0.9)), 0, 0.66, 0.29); chest.castShadow = false; bot.add(chest);
     const armL = at(box(0.09, 0.34, 0.11, shell), -0.38, 0.62, 0), armR = at(box(0.09, 0.34, 0.11, shell), 0.38, 0.62, 0);
     bot.add(armL, armR);
     const head = new THREE.Group(); head.position.y = 1.14; bot.add(head);
     head.add(box(0.56, 0.4, 0.46, shell));
-    const visor = at(box(0.46, 0.2, 0.03, mat(0x0d1226, { roughness: 0.2, metalness: 0.6 })), 0, 0.01, 0.235); visor.castShadow = false; head.add(visor);
+    const visor = at(box(0.46, 0.2, 0.03, mat(0x0d1226, { roughness: 0.2, metalness: 0.6, ...ghostOpts })), 0, 0.01, 0.235); visor.castShadow = false; head.add(visor);
     const eyeL = at(ball(0.045, eye, 8), -0.1, 0.01, 0.255), eyeR = at(ball(0.045, eye, 8), 0.1, 0.01, 0.255);
     head.add(eyeL, eyeR);
     head.add(at(cyl(0.015, 0.015, 0.22, mat(C.steel), 6), 0, 0.31, 0));
     const tip = at(ball(0.06, new THREE.MeshBasicMaterial({ color }), 10), 0, 0.44, 0); head.add(tip);
     if (lead) head.add(at(box(0.6, 0.05, 0.5, glow(COLORS.hq, 0.7)), 0, 0.22, 0));
+    let flag = null;
+    if (post) {
+      flag = new THREE.Group(); flag.position.set(0.38, 0.5, 0); armR.add(flag);
+      flag.add(at(cyl(0.012, 0.012, 0.7, mat(C.steel), 6), 0, 0.35, 0));
+      flag.add(at(box(0.02, 0.18, 0.28, new THREE.MeshBasicMaterial({ color: C.bad })), 0, 0.6, 0.14));
+    }
     const hit = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.2, 1.4), new THREE.MeshBasicMaterial({ visible: false })); hit.position.y = 1.1; g.add(hit);
-    label(key, new THREE.Vector3(x, 0.2 + 2.1 * size, z), agent.name, null, true, true);
-    const phase = i * 1.3;
+    const anchor = new THREE.Vector3(x, 0.2 + 2.1 * size, z);
+    label(key, anchor, agent.name, null, true, true);
+    const phase = i * 1.3, walkStart = now() + 0.6 + i * 0.2, walkDur = 3.2;
     S.anim.push(t => {
       const state = S.agentStates.get(key) || 'idle', busy = state === 'busy', on = S.selected === key || S.hovered?.key === key;
-      bot.position.y = 0.08 + Math.sin(t * (busy ? 6 : 1.6) + phase) * (busy ? 0.06 : 0.04);
+      let moving = false;
+      if (post) {
+        const q = clamp((t - walkStart) / walkDur, 0, 1), e = q * q * (3 - 2 * q);
+        g.position.x = x + (post.x - x) * e; g.position.z = z + (post.z - z) * e;
+        moving = q > 0 && q < 1;
+        g.rotation.y = moving ? Math.atan2(post.x - x, post.z - z) : post.a + Math.PI;
+      }
+      anchor.set(g.position.x, 0.2 + 2.1 * size, g.position.z);
+      bot.position.y = moving ? 0.08 + Math.abs(Math.sin(t * 10)) * 0.08 : 0.08 + Math.sin(t * (busy ? 6 : 1.6) + phase) * (busy ? 0.06 : 0.04);
       head.rotation.y = busy ? Math.sin(t * 5 + phase) * 0.45 : Math.sin(t * 0.5 + phase) * 0.15;
-      armL.rotation.x = busy ? Math.sin(t * 9) * 0.7 : 0; armR.rotation.x = busy ? -Math.sin(t * 9) * 0.7 : 0;
-      const tint = state === 'error' ? C.bad : state === 'done' ? C.ok : color;
+      if (post && !moving) { armR.rotation.x = -2.6 + Math.sin(t * 4) * 0.15; armL.rotation.x = 0; }
+      else { armL.rotation.x = busy || moving ? Math.sin(t * 9) * 0.7 : 0; armR.rotation.x = busy || moving ? -Math.sin(t * 9) * 0.7 : 0; }
+      const tint = state === 'error' ? C.bad : state === 'done' ? C.ok : post ? (Math.sin(t * 6) > 0 ? C.bad : color) : color;
       eye.color.setHex(tint); tip.material.color.setHex(tint); ring.material.color.setHex(on ? 0xffffff : tint);
       tip.visible = !busy || Math.sin(t * 14) > -0.2;
       const blink = !busy && (t + phase) % 4 < 0.12;
       eyeL.scale.y = eyeR.scale.y = blink ? 0.2 : 1;
       ring.rotation.z = busy ? t * 3 : t * 0.4;
-      ring.material.opacity = on ? 0.95 : busy ? 0.6 + Math.sin(t * 8) * 0.3 : 0.45;
+      ring.material.opacity = on ? 0.95 : busy ? 0.6 + Math.sin(t * 8) * 0.3 : ghost ? 0.25 + Math.sin(t * 2) * 0.15 : 0.45;
       ring.scale.setScalar(on ? 1.12 + Math.sin(t * 3) * 0.03 : 1);
+      if (flag) flag.visible = !moving;
     });
   });
+}
+// Speech bubble above an agent for a few seconds. Text only (no HTML).
+function agentSay(id, text, ms = 9000) {
+  if (!S) return;
+  const key = 'agent:' + id;
+  let b = S.bubbles.get(key);
+  if (!b) { b = { el: document.createElement('div') }; b.el.className = 'c3-bubble'; S.bubbleLayer.append(b.el); S.bubbles.set(key, b); }
+  clearTimeout(b.timer);
+  const line = String(text || '').replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+  b.el.textContent = line.length > 160 ? line.slice(0, 157) + '…' : line;
+  b.el.style.setProperty('--c', '#' + (S.agentColors[key] ?? 0xffffff).toString(16).padStart(6, '0'));
+  b.el.hidden = !line;
+  b.timer = setTimeout(() => { b.el.remove(); S?.bubbles.delete(key); }, ms);
+}
+// A glowing packet that flies from one agent to another along an arc (delegation, replies).
+function agentFlow(fromId, toId, delay = 0, dur = 0.9) {
+  if (!S) return;
+  const color = S.agentColors['agent:' + fromId] ?? 0xffffff;
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), new THREE.MeshBasicMaterial({ color }));
+  const trail = [0.16, 0.11, 0.07].map(r => new THREE.Mesh(new THREE.SphereGeometry(r, 8, 8), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5 })));
+  [core, ...trail].forEach(m => { m.visible = false; S.packetGroup.add(m); });
+  S.packets.push({ from: 'agent:' + fromId, to: 'agent:' + toId, core, trail, start: now() + delay, dur });
+}
+const p0 = new THREE.Vector3(), p1 = new THREE.Vector3(), pc = new THREE.Vector3(), pq = new THREE.Vector3();
+function arcAt(a, b, q, out) {
+  pc.set((a.x + b.x) / 2, 4 + a.distanceTo(b) * 0.15, (a.z + b.z) / 2);
+  const u = 1 - q;
+  return out.set(u * u * a.x + 2 * u * q * pc.x + q * q * b.x, u * u * a.y + 2 * u * q * pc.y + q * q * b.y, u * u * a.z + 2 * u * q * pc.z + q * q * b.z);
+}
+function packets(t) {
+  S.packets = S.packets.filter(p => {
+    const a = S.agentPos[p.from], b = S.agentPos[p.to], q = (t - p.start) / p.dur;
+    if (q >= 1 || !a || !b) { [p.core, ...p.trail].forEach(m => { S.packetGroup.remove(m); dispose(m); }); return false; }
+    if (q < 0) return true;
+    p0.set(a.x, 1.6, a.z); p1.set(b.x, 1.6, b.z);
+    p.core.visible = true; arcAt(p0, p1, q, p.core.position);
+    p.trail.forEach((m, i) => { const k = Math.max(0, q - (i + 1) * 0.05); m.visible = true; arcAt(p0, p1, k, m.position); });
+    return true;
+  });
+}
+function bubbles() {
+  const w = S.container.clientWidth, h = S.container.clientHeight;
+  for (const [key, b] of S.bubbles) {
+    const pos = S.agentPos[key];
+    if (!pos) { b.el.hidden = true; continue; }
+    v3.set(pos.x, 0.2 + 2.1 * (S.agentSize[key] || 1.3) + 0.9, pos.z).project(S.camera);
+    const x = (v3.x + 1) / 2 * w, y = (1 - v3.y) / 2 * h;
+    b.el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    b.el.hidden = !b.el.textContent || x < -100 || x > w + 100 || y < -40 || y > h + 80;
+  }
 }
 function agentState(id, state = 'idle') {
   if (!S) return;
@@ -887,6 +967,7 @@ function loop() {
   for (const f of S.anim) f(t);
   traffic(t);
   animateMail(t);
+  packets(t);
   S.renderer.render(S.scene, S.camera);
   const w = S.container.clientWidth, h = S.container.clientHeight;
   for (const l of S.labelList) {
@@ -895,6 +976,7 @@ function loop() {
     l.el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
     l.el.hidden = x < -60 || x > w + 60 || y < -20 || y > h + 60 || (l.tag && l.key !== S.selected && l.key !== S.hovered?.key);
   }
+  bubbles();
 }
 
 if (typeof window !== 'undefined') window.A2ZCity = { mount, supported, drive, version: '1.1.0' };
