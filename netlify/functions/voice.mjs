@@ -104,7 +104,12 @@ async function turn(request, body, env, store, key, fetchImpl) {
     await charge(store, env, 'turn');
     await currentTurn();
     const started = performance.now();
-    const transcript = text ?? await transcribe(ctx, wav, modes);
+    const transcriptionSignal = AbortSignal.any([signal, AbortSignal.timeout(10000)]);
+    const transcript = text ?? await transcribe({ ...ctx, signal: transcriptionSignal }, wav, modes).catch(error => {
+      signal.throwIfAborted();
+      if (transcriptionSignal.aborted) throw fault(504, 'Speech transcription timed out. Try again.');
+      throw fault(error.status || 502, 'Speech transcription failed. ' + (error.status === 429 ? 'Try again shortly.' : 'Try again or use text.'));
+    });
     const sttMs = wav ? Math.round(performance.now() - started) : 0;
     if (!transcript) return json({ transcript: '', answer: '', timings: { sttMs } });
     await currentTurn();
@@ -123,11 +128,11 @@ async function turn(request, body, env, store, key, fetchImpl) {
   }
 }
 
-export async function voice(request, { env = process.env, store, fetchImpl = fetch } = {}, isAsk = false) {
+export async function voice(request, { env = process.env, store, fetchImpl = fetch, voiceOrigin } = {}, isAsk = false) {
   if (request.method !== 'POST') return json({ error: 'POST required' }, 405, { Allow: 'POST' });
   if (env.VOICE_ENABLED !== '1') return json({ error: 'Call Brain is disabled.' }, 503);
   try {
-    if (request.headers.get('origin') !== origin(env)) throw fault(403, 'Unapproved voice origin.');
+    if (request.headers.get('origin') !== (voiceOrigin ?? origin(env))) throw fault(403, 'Unapproved voice origin.');
     if (request.headers.get('content-type')?.split(';')[0] !== 'application/json') throw fault(415, 'Expected JSON.');
     const body = JSON.parse(await readBody(request, isAsk ? 550000 : 4096));
     if (!body || typeof body !== 'object') throw fault(400, 'Invalid request.');

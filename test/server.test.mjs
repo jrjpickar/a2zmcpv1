@@ -47,7 +47,7 @@ test('server: /health, bearer auth on /mcp, Streamable HTTP JSON responses, no t
   const list = await (await rpc(server.base, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, auth)).json();
   assert.deepEqual(list.result.tools.map(tool => tool.name), ['a2z_operating_report']);
   assert.equal((await rpc(server.base, { jsonrpc: '2.0', id: 3, method: 'tools/list' }, {}, '/mcp/' + token)).status, 401, 'URL token is off by default');
-  assert.equal((await fetch(server.base + '/')).status, 200);
+  assert.equal((await fetch(server.base + '/')).status, 401);
   assert.ok(!server.output().includes(token));
 });
 
@@ -60,4 +60,93 @@ test('server: optional URL token form when MCP_URL_TOKEN=on', async t => {
   await new Promise(r => setTimeout(r, 100));
   assert.ok(!server.output().includes(token), 'token URLs are masked in logs');
   assert.match(server.output(), /\/mcp\/\*\*\*/);
+});
+
+
+test('dashboard login issues a secure session and protects the dashboard and API', async t => {
+  const key = 'dashboard-test-key-0123456789';
+  const server = await start({ DASHBOARD_KEY: key });
+  t.after(server.stop);
+  const proxy = { 'x-forwarded-proto': 'https' };
+  const origin = server.base.replace('http:', 'https:');
+  assert.equal((await fetch(server.base + '/api/metrics', { headers: proxy })).status, 401);
+  const form = { method: 'POST', redirect: 'manual', body: new URLSearchParams({ key }) };
+  const crossSite = await fetch(server.base + '/login', {
+    ...form, headers: { ...proxy, origin: 'null', 'sec-fetch-site': 'cross-site' },
+  });
+  assert.equal(crossSite.status, 403);
+  const response = await fetch(server.base + '/login', {
+    ...form, headers: { ...proxy, origin: 'null', 'sec-fetch-site': 'same-origin' },
+  });
+  assert.equal(response.status, 303);
+  const cookie = response.headers.get('set-cookie');
+  assert.match(cookie, /Path=\/; Secure; HttpOnly; SameSite=Lax/);
+  assert.ok(!cookie.includes(key));
+  const headers = { ...proxy, cookie: cookie.split(';')[0] };
+  assert.equal((await fetch(server.base + '/', { headers })).status, 200);
+  assert.equal((await fetch(server.base + '/api/metrics', { headers })).status, 200);
+  assert.equal((await fetch(server.base + '/api/alerts', { method: 'POST', headers: { ...headers, origin: 'https://different.example' } })).status, 403);
+});
+
+test('mail WebSocket requires a same-origin dashboard session and delivers a snapshot', async t => {
+  const { WebSocket } = await import('ws');
+  const key = 'dashboard-test-key-0123456789';
+  const server = await start({ DASHBOARD_KEY: key });
+  t.after(server.stop);
+  const origin = server.base.replace('http:', 'https:');
+  const url = server.base.replace('http:', 'ws:') + '/live';
+  const headers = { 'x-forwarded-proto': 'https', origin };
+  const anonymous = new WebSocket(url, { headers });
+  await new Promise((resolve, reject) => {
+    anonymous.once('error', error => {
+      try { assert.match(error.message, /401/); resolve(); } catch (failure) { reject(failure); }
+    });
+    anonymous.once('open', () => { anonymous.close(); reject(new Error('Anonymous socket accepted')); });
+  });
+  const login = await fetch(server.base + '/login', {
+    method: 'POST', redirect: 'manual', headers, body: new URLSearchParams({ key }),
+  });
+  const socket = new WebSocket(url, { headers: { ...headers, cookie: login.headers.get('set-cookie').split(';')[0] } });
+  t.after(() => socket.terminate());
+  const event = await new Promise((resolve, reject) => {
+    socket.once('error', reject);
+    socket.once('message', data => resolve(JSON.parse(data)));
+  });
+  assert.equal(event.type, 'mail');
+  assert.equal(event.mail.stats.unreadIncoming, 6);
+});
+
+test('VM voice starts with a rotating HTTPS tunnel origin and accepts audio-sized requests', async t => {
+  const { request } = await import('node:http');
+  const key = 'dashboard-test-key-0123456789';
+  const server = await start({
+    DASHBOARD_KEY: key, VOICE_ENABLED: '1', GROQ_API_KEY: 'test-only',
+    VOICE_APPROVED_REASONING: 'groq', VOICE_GROQ_STT_APPROVED: '1',
+  });
+  t.after(server.stop);
+  const host = 'sample-rotating-host.trycloudflare.com';
+  async function post(path, data, headers = {}) {
+    const body = JSON.stringify(data);
+    return new Promise((resolve, reject) => {
+      const req = request(server.base + path, { method: 'POST', headers: {
+        host, origin: 'https://' + host, 'x-forwarded-proto': 'https',
+        'x-a2z-key': key, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), ...headers,
+      } }, response => {
+        let text = '';
+        response.on('data', chunk => { text += chunk; });
+        response.on('end', () => resolve({ status: response.statusCode, body: JSON.parse(text) }));
+      });
+      req.on('error', reject);
+      req.end(body);
+    });
+  }
+  const session = await post('/api/voice', { action: 'start' });
+  assert.equal(session.status, 200);
+  assert.deepEqual(session.body.stt, ['groq']);
+  const result = await post('/api/ask', {
+    action: 'turn', id: '105834cc-213b-49a3-ae8a-b071cb7b7728', history: [],
+    audio: 'A'.repeat(100000),
+  }, { 'x-a2z-voice': session.body.token });
+  assert.equal(result.status, 400);
+  assert.match(result.body.error, /PCM audio/);
 });

@@ -31,12 +31,31 @@ export function signLaunch(env, payload) {
 
 export function memoryStore() {
   const entries = new Map();
+  let sweepAfter = 0;
+  function current(key, now) {
+    const record = entries.get(key);
+    if (record && record.expires <= now) {
+      entries.delete(key);
+      return null;
+    }
+    return record ?? null;
+  }
   return {
-    async getWithMetadata(key) { return structuredClone(entries.get(key) ?? null); },
+    async getWithMetadata(key) {
+      const record = current(key, Date.now());
+      return record ? { data: structuredClone(record.data), etag: record.etag } : null;
+    },
     async setJSON(key, data, options) {
-      const old = entries.get(key);
+      const now = Date.now();
+      if (now >= sweepAfter) {
+        for (const id of entries.keys()) current(id, now);
+        sweepAfter = now + 60000;
+      }
+      const old = current(key, now);
       if (options.onlyIfNew ? old : old?.etag !== options.onlyIfMatch) return { modified: false };
-      entries.set(key, { data: structuredClone(data), etag: nonce() });
+      if (!old && entries.size >= 4096) throw fault(503, 'Voice storage is busy. Try again.');
+      const expires = key.startsWith('session/') ? data.expires : now + (key.startsWith('quota/') ? 2 * 86400000 : 120000);
+      entries.set(key, { data: structuredClone(data), etag: nonce(), expires });
       return { modified: true };
     },
   };

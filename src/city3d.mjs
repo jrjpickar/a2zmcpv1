@@ -1,6 +1,8 @@
+import { frames } from '../public/animation-frame.mjs';
 // A2Z city: a live, clickable 3D operations map built with Three.js.
 // Bundled into public/city3d.js by scripts/build-city.mjs (global A2ZCity). public/map.js stays as the 2D fallback.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 const C = {
@@ -46,9 +48,11 @@ export function supported() {
 
 export function mount(container, opts = {}) {
   unmount();
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(1.75, window.devicePixelRatio || 1));
-  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFShadowMap;
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true });
+  renderer.setPixelRatio(Math.min(1.25, window.devicePixelRatio || 1));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
   renderer.domElement.className = 'c3-canvas';
   container.appendChild(renderer.domElement);
@@ -65,7 +69,7 @@ export function mount(container, opts = {}) {
   scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x2a1e48, 1.7));
   const sun = new THREE.DirectionalLight(0xfff0d6, 2.6);
   sun.position.set(-16, 32, 18); sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(1024, 1024);
   Object.assign(sun.shadow.camera, { left: -28, right: 28, top: 28, bottom: -28, near: 1, far: 90 });
   sun.shadow.bias = -0.0005; sun.shadow.normalBias = 0.02;
   scene.add(sun);
@@ -103,7 +107,8 @@ export function mount(container, opts = {}) {
 
 export function unmount() {
   if (!S) return;
-  cancelAnimationFrame(S.frame); S.ro?.disconnect();
+  frames.cancel(S.frame); S.ro?.disconnect();
+  S.controls.dispose();
   S.scene.traverse(dispose);
   for (const b of S.bubbles.values()) clearTimeout(b.timer);
   S.renderer.dispose(); S.renderer.domElement.remove(); S.labels.remove(); S.bubbleLayer.remove();
@@ -114,6 +119,14 @@ function dispose(o) { o.geometry?.dispose?.(); if (o.material) [].concat(o.mater
 function resize() {
   if (!S) return;
   const w = S.container.clientWidth || 800, h = S.container.clientHeight || 600, aspect = w / h;
+  S.width = w;
+  S.height = h;
+  const visible = Boolean(S.container.clientWidth && S.container.clientHeight);
+  if (visible && !S.visible) {
+    S.frameCount = 0;
+    S.sampleStart = null;
+  }
+  S.visible = visible;
   const view = Math.max(36, (aspect < 1 ? 46 : 58) / aspect);
   Object.assign(S.camera, { left: -view * aspect / 2, right: view * aspect / 2, top: view / 2, bottom: -view / 2 });
   S.camera.updateProjectionMatrix();
@@ -138,24 +151,44 @@ function scenery(scene) {
   }
   const ring = new THREE.Mesh(new THREE.RingGeometry(3.6, 5.1, 56), roadM);
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.22; ring.receiveShadow = true; g.add(ring);
-  const treeCols = [C.tree, 0x2fd08a, 0x18a05f, 0xff8fc8];
+  const treeMaterials = [C.tree, 0x2fd08a, 0x18a05f, 0xff8fc8].map(color => mat(color, { flatShading: true }));
+  const trunk = mat(C.trunk), steel = mat(C.steel), lamp = glow(0xfff1b8, 1.4);
   const spots = [];
   for (let i = -19.5; i <= 19.5; i += 3) spots.push([i, -20], [i, 20], [-20, i], [20, i]);
   [[-6.5, -6], [6.5, -6], [-6.5, 6.5], [6.5, 6.5], [-19, -12], [18, 12]].forEach(p => spots.push(p));
   for (const [x, z] of spots) {
     if (rnd() < 0.2) continue;
     const s = 0.55 + rnd() * 0.55, t = new THREE.Group();
-    t.add(at(cyl(0.11 * s, 0.15 * s, 0.6 * s, mat(C.trunk), 6), 0, 0.3 * s, 0));
-    t.add(at(shade(new THREE.Mesh(new THREE.IcosahedronGeometry(0.62 * s, 0), mat(treeCols[Math.floor(rnd() * 4)], { flatShading: true }))), 0, 1.05 * s, 0));
+    t.add(at(cyl(0.11 * s, 0.15 * s, 0.6 * s, trunk, 6), 0, 0.3 * s, 0));
+    t.add(at(shade(new THREE.Mesh(new THREE.IcosahedronGeometry(0.62 * s, 0), treeMaterials[Math.floor(rnd() * 4)])), 0, 1.05 * s, 0));
     t.position.set(x + (rnd() - 0.5) * 0.8, 0.2, z + (rnd() - 0.5) * 0.8); g.add(t);
   }
   // Streetlights around the ring road.
   for (let i = 0; i < 8; i++) {
     const a = (i + 0.5) * Math.PI / 4, x = Math.sin(a) * 5.6, z = Math.cos(a) * 5.6;
-    g.add(at(cyl(0.05, 0.06, 1.4, mat(C.steel), 6), x, 0.9, z));
-    g.add(at(ball(0.13, glow(0xfff1b8, 1.4), 8), x, 1.65, z));
+    g.add(at(cyl(0.05, 0.06, 1.4, steel, 6), x, 0.9, z));
+    g.add(at(ball(0.13, lamp, 8), x, 1.65, z));
   }
-  scene.add(g);
+  g.updateMatrixWorld(true);
+  const batches = new Map();
+  g.traverse(mesh => {
+    if (!mesh.isMesh) return;
+    const key = mesh.material.id + ':' + mesh.castShadow + ':' + mesh.receiveShadow;
+    if (!batches.has(key)) batches.set(key, []);
+    batches.get(key).push(mesh);
+  });
+  const scenery = new THREE.Group();
+  for (const meshes of batches.values()) {
+    const [first] = meshes;
+    const geometries = meshes.map(mesh => mesh.geometry.applyMatrix4(mesh.matrixWorld));
+    const geometry = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries);
+    const batch = new THREE.Mesh(geometry, first.material);
+    batch.castShadow = first.castShadow;
+    batch.receiveShadow = first.receiveShadow;
+    scenery.add(batch);
+    if (geometries.length > 1) geometries.forEach(item => item.dispose());
+  }
+  scene.add(scenery);
 }
 
 // ---------------- dynamic city ----------------
@@ -180,6 +213,7 @@ function update(report, tiles, palette = [], alerts = [], agents = []) {
   if (tile.mail) mailDistrict(city, tile.mail);
   flows(city, report);
   S.scene.add(city);
+  S.renderer.shadowMap.needsUpdate = true;
   highlight();
   // Cars follow the funnel: New leads to Proposals sent per new proposal, Proposals sent to Jobs won per new win.
   const f = report.kpis.funnel, range = report.range.from + '|' + report.range.to;
@@ -426,7 +460,7 @@ function packets(t) {
   });
 }
 function bubbles() {
-  const w = S.container.clientWidth, h = S.container.clientHeight;
+  const { width: w, height: h } = S;
   for (const [key, b] of S.bubbles) {
     const pos = S.agentPos[key];
     if (!pos) { b.el.hidden = true; continue; }
@@ -954,9 +988,18 @@ const money = v => v == null ? '-' : Math.abs(v) >= 1e6 ? '$' + (v / 1e6).toFixe
 const v3 = new THREE.Vector3();
 function loop() {
   if (!S) return;
-  S.frame = requestAnimationFrame(loop);
-  if (document.hidden || !S.container.offsetParent) return;
+  S.frame = frames.request(loop);
+  if (!S.visible) return;
   const t = now();
+  S.frameCount = (S.frameCount || 0) + 1;
+  S.sampleStart ??= t;
+  if (t - S.sampleStart >= .75) {
+    const frameRate = S.frameCount / (t - S.sampleStart);
+    const ratio = S.renderer.getPixelRatio();
+    if (frameRate < 54 && ratio > .75) S.renderer.setPixelRatio(Math.max(.75, ratio * .85));
+    S.frameCount = 0;
+    S.sampleStart = t;
+  }
   if (S.focus) {
     const q = Math.min(1, (t - S.focus.t0) / 0.9), e = 1 - Math.pow(1 - q, 3);
     S.controls.target.lerpVectors(S.focus.from, S.focus.target, e);
@@ -969,7 +1012,7 @@ function loop() {
   animateMail(t);
   packets(t);
   S.renderer.render(S.scene, S.camera);
-  const w = S.container.clientWidth, h = S.container.clientHeight;
+  const { width: w, height: h } = S;
   for (const l of S.labelList) {
     v3.copy(l.anchor).project(S.camera);
     const x = (v3.x + 1) / 2 * w, y = (1 - v3.y) / 2 * h;

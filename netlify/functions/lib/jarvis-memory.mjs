@@ -3,6 +3,7 @@
 // playbook versions with automatic rollback, pinned chats, chat search, custom bots and a history budget.
 // Storage is any key/value adapter with getWithMetadata, setJSON (conditional writes) and delete, such as Netlify Blobs.
 import { randomUUID } from 'node:crypto';
+import { topicFor } from '../../../public/topic-rules.mjs';
 
 export { openJarvisStore, STORE_NAME } from './jarvis-store.mjs';
 export const limits = {
@@ -36,7 +37,7 @@ const keys = {
   bots: () => 'bots',
 };
 const emptyMemory = () => ({
-  playbook: [], lessons: [], exemplars: [], disliked: [], qcFindings: [],
+  playbook: [], lessons: [], facts: [], exemplars: [], disliked: [], qcFindings: [],
   playbookMeta: { version: 0, at: null, up: 0, down: 0, restored: false, evaluated: false },
   versions: [], rollbacks: [],
   stats: { runs: 0, up: 0, down: 0, qcPass: 0, qcFail: 0, reflections: 0, feedbackSinceReflect: 0, lastReflectAt: null },
@@ -104,19 +105,48 @@ export function createMemory(store) {
       return read(store, keys.thread(role, id), () => null);
     },
 
+
+    async classifyThread(role, thread, classifier) {
+      if (thread.topic) return thread;
+      const topic = await classifier(thread.title);
+      const { data } = await update(store, keys.thread(role, thread.id), () => null, value => {
+        if (!value || value.topic) return false;
+        value.topic = topic;
+      });
+      if (!data) return null;
+      await update(store, keys.index(role), () => ({ threads: [] }), index => {
+        const entry = index.threads.find(value => value.id === thread.id);
+        if (!entry || entry.topic === data.topic) return false;
+        entry.topic = data.topic;
+      });
+      return data;
+    },
+
+    async recordFact(role, prompt) {
+      const match = /^(?:our|a2z(?:'s)?) ([a-z][a-z0-9 /-]{2,60}) (?:is|are) ([^.!?\n]{2,180})[.]?$/i.exec(prompt.trim());
+      if (!match || /\b(?:password|secret|token|credential|api key|ssn)\b/i.test(match[1])) return;
+      const key = match[1].toLowerCase().trim();
+      const text = clip('A2Z ' + match[1] + ' is ' + match[2], 240);
+      await update(store, keys.memory(role), emptyMemory, data => {
+        const facts = data.facts ?? [];
+        if (facts.some(fact => fact.key === key && fact.text === text)) return false;
+        data.facts = [{ key, text }, ...facts.filter(fact => fact.key !== key)].slice(0, 30);
+      });
+    },
+
     async getMemory(role) {
       const data = { ...emptyMemory(), ...(await read(store, keys.memory(role), emptyMemory)) };
       data.playbookMeta = { ...emptyMemory().playbookMeta, ...data.playbookMeta };
       return data;
     },
 
-    async createThread(role, firstPrompt) {
-      const thread = { id: randomUUID(), role, title: clip(firstPrompt, 60) || 'New chat', createdAt: now(), updatedAt: now(), messages: [] };
+    async createThread(role, firstPrompt, topic = topicFor(firstPrompt)) {
+      const thread = { id: randomUUID(), role, topic, title: clip(firstPrompt, 60) || 'New chat', createdAt: now(), updatedAt: now(), messages: [] };
       await store.setJSON(keys.thread(role, thread.id), thread, { onlyIfNew: true });
       const dropped = [];
       await update(store, keys.index(role), () => ({ threads: [] }), index => {
         dropped.length = 0;
-        index.threads.unshift({ id: thread.id, title: thread.title, updatedAt: thread.updatedAt, count: 0 });
+        index.threads.unshift({ id: thread.id, topic: thread.topic, title: thread.title, updatedAt: thread.updatedAt, count: 0 });
         // Pinned chats are never trimmed. The oldest unpinned chat goes first.
         while (index.threads.length > limits.threads) {
           const position = index.threads.findLastIndex(entry => !entry.pinned);
@@ -475,6 +505,9 @@ export function guidanceFor(role, data, prompt) {
   if (lessons.length) parts.push('Operator instructions and corrections (newest first):\n' + lessons.map(item => '- ' + item.text).join('\n'));
   if (role === 'build' && data.qcFindings?.length) parts.push('Recent QC rejections. Do not repeat these problems:\n' + data.qcFindings.slice(0, 3).map(item => '- ' + item.text.slice(0, 240)).join('\n'));
   const query = tokens(prompt);
+  const facts = (data.facts || []).map(fact => ({ fact, score: similarity(query, tokens(fact.text)) }))
+    .filter(({ score }) => score >= .2).sort((a, b) => b.score - a.score).slice(0, 4);
+  if (facts.length) parts.push('Relevant facts supplied by the operator:\n' + facts.map(({ fact }) => '- ' + fact.text).join('\n'));
   const matches = (data.exemplars || [])
     .map(item => ({ item, score: similarity(query, tokens(item.prompt)) }))
     .filter(({ score }) => score >= 0.2)

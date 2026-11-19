@@ -6,6 +6,7 @@
 //                                      playbook-restore, shared-add, shared-delete, bot-create, bot-update, bot-delete
 import { agentNames, builtinRoles, groqModel, JARVIS_MODEL, rolePattern } from './lib/jarvis-agents.mjs';
 import { botContexts, createMemory, limits, openJarvisStore, publicMemory, shouldReflect, validId } from './lib/jarvis-memory.mjs';
+import { classifyTopic } from './lib/classify-topic.mjs';
 import { guard, readBody } from './lib/jarvis-http.mjs';
 import { json } from './lib/http.mjs';
 
@@ -33,7 +34,7 @@ function checkCommand(command) {
   if (['bot-update', 'bot-delete'].includes(action) && !command.role.startsWith('bot-')) throw invalid();
 }
 
-export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch, openStore = () => openJarvisStore(env) } = {}) {
+export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch, openStore = () => openJarvisStore(env), classifier } = {}) {
   async function reflect(memory, role, name) {
     if (!env.GROQ_API_KEY) throw Object.assign(new Error('Set GROQ_API_KEY to let agents reflect on feedback.'), { agentStatus: 503 });
     return memory.reflect(role, groqModel(env.GROQ_API_KEY, fetchImpl, { model: env.JARVIS_GROQ_MODEL?.trim() || JARVIS_MODEL }), name);
@@ -71,7 +72,8 @@ export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch
         const id = url.searchParams.get('thread');
         const q = url.searchParams.get('q');
         if (id) {
-          const thread = await memory.getThread(role, id);
+          let thread = await memory.getThread(role, id);
+          if (thread && !thread.topic && classifier) thread = await memory.classifyThread(role, thread, classifier);
           return thread ? json({ thread }) : json({ error: 'Chat not found.' }, 404);
         }
         if (q !== null) return json({ results: await memory.searchThreads(role, q) });
@@ -119,5 +121,5 @@ export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch
   };
 }
 
-export default createJarvisMemoryHandler();
+export default createJarvisMemoryHandler({ classifier: classifyTopic });
 export const config = { path: '/api/jarvis-memory' };

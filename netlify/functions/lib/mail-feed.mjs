@@ -31,7 +31,7 @@ export async function mailFeed(action, { token, query, draft, fetchImpl = fetch 
   return response.json();
 }
 
-export async function inboxPage({ token, cursor, fetchImpl }) {
+export async function inboxPage({ token, cursor, fetchImpl, includeHeaders = false }) {
   let query = {};
   if (cursor != null) {
     const match = /^(\d{1,20}):([1-9]\d{0,9})$/.exec(cursor);
@@ -47,11 +47,11 @@ export async function inboxPage({ token, cursor, fetchImpl }) {
     throw new Error('Invalid mailbox cursor');
   }
   const messages = await Promise.all(page.messages.map(async ({ id }) => {
-    const { subject, body, date, from } = await mailFeed('message', { token, fetchImpl, query: { id } });
+    const { subject, body, date, from, headers } = await mailFeed('message', { token, fetchImpl, query: { id, ...(includeHeaders ? { headers: 1 } : {}) } });
     if (typeof id !== 'string' || typeof subject !== 'string' || typeof body !== 'string') {
       throw new Error('Invalid mailbox message');
     }
-    return { id, subject, text: body, receivedAt: date, from };
+    return { id, subject, text: body, receivedAt: date, from, headers };
   }));
   return { messages, nextCursor };
 }

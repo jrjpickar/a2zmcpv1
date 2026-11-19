@@ -4,6 +4,8 @@ import { cloudflareModel, CLOUDFLARE_MODEL, compileAgents, failure, geminiModel,
 import { createMemory, guidanceFor, historyFor, limits, openJarvisStore, sharedFor, validId } from './lib/jarvis-memory.mjs';
 import { INSTRUCTIONS_KEY, instructionsText } from './jarvis-instructions.mjs';
 import { guard, readBody } from './lib/jarvis-http.mjs';
+import { classifyTopic } from './lib/classify-topic.mjs';
+import { mailActions } from './lib/jarvis-mail-actions.mjs';
 import { mailboxContext } from './lib/jarvis-mail.mjs';
 import { summarize, validatePlan } from './lib/jarvis-sandbox.mjs';
 import { json } from './lib/http.mjs';
@@ -28,7 +30,7 @@ function assistantRecord(result) {
   return { content: result.answer || result.error || '', meta };
 }
 
-export function createJarvisHandler({ env = process.env, fetchImpl = fetch, readSystems = systemContext, readMail = null, openStore = () => openJarvisStore(env) } = {}) {
+export function createJarvisHandler({ env = process.env, fetchImpl = fetch, readSystems = systemContext, readMail = null, openStore = () => openJarvisStore(env), classifier } = {}) {
   let running = false;
   return async function handler(request) {
     const { access, response } = guard(request, { env });
@@ -76,9 +78,13 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     async function reply(result, status = 200) {
       if (!memory || status !== 200) return json(result, status);
       try {
-        thread ??= await memory.createThread(requestedRole, prompt.startsWith('/execute') ? 'Execute: ' + (result.plan?.task || 'plan') : prompt);
+        if (!thread) {
+          const title = prompt.startsWith('/execute') ? 'Execute: ' + (result.plan?.task || 'plan') : prompt;
+          thread = await memory.createThread(requestedRole, title, await classifier?.(title));
+        }
         const { reply: stored, title } = await memory.appendExchange(requestedRole, thread.id, prompt.trim(), assistantRecord(result));
         if (result.trace && !result.lesson && !result.execute) {
+          await memory.recordFact(requestedRole, prompt);
           await memory.recordRun(requestedRole, { approved: requestedRole === result.agent ? result.approved : undefined });
           if (result.agent && result.agent !== requestedRole && (builtinRoles.includes(result.agent) || bots.some(bot => bot.id === result.agent))) {
             await memory.recordRun(result.agent, { approved: result.approved });
@@ -139,6 +145,7 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       let systems;
       const deps = {
         bots,
+        mailAction: access.mailbox ? mailActions({ env, fetchImpl }) : null,
         cloudflare: cfAccount && cfToken ? cloudflareModel(cfAccount, cfToken, fetchImpl, { model: env.CLOUDFLARE_AI_MODEL?.trim() || CLOUDFLARE_MODEL, usage }) : null,
         gemini: geminiKey ? geminiModel(geminiKey, fetchImpl, { model: env.GEMINI_MODEL?.trim() || GEMINI_MODEL, usage }) : null,
         systems: () => (systems ??= readSystems(preset).catch(() => { throw failure('A2Z metrics are unavailable right now.', 502); })),
@@ -165,5 +172,5 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
   };
 }
 
-export default createJarvisHandler();
+export default createJarvisHandler({ classifier: classifyTopic });
 export const config = { path: '/api/jarvis' };

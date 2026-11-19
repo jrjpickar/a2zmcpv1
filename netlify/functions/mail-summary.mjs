@@ -1,8 +1,9 @@
+import { loadMailFilters } from './mail-filters.mjs';
 import { dashboardAccess } from './lib/dashboard-auth.mjs';
 import { json } from './lib/http.mjs';
 import { mailSample, summarizePage } from './lib/mail.mjs';
 
-export default async (request, { fetchImpl = fetch } = {}) => {
+export default async (request, { fetchImpl = fetch, openStore } = {}) => {
   if (request.method !== 'POST') return json({ error: 'POST required' }, 405, { Allow: 'POST' });
   if (process.env.DATA_MODE === 'sample') return json(mailSample);
   const access = dashboardAccess(request);
@@ -23,7 +24,8 @@ export default async (request, { fetchImpl = fetch } = {}) => {
     return json({ error: 'Invalid mailbox cursor' }, 400);
   }
   try {
-    const page = await summarizePage({ token, cursor, apiKey, model: process.env.GROQ_MODEL, fetchImpl });
+    const filters = await loadMailFilters(openStore);
+    const page = await summarizePage({ token, cursor, apiKey, model: process.env.GROQ_MODEL, fetchImpl, filters });
     return json({ status: 'ok', ...page });
   } catch (error) {
     if (error.retryAfter) return json({ error: 'Waiting for the mailbox or Groq rate limit.' }, 429, { 'Retry-After': String(error.retryAfter) });

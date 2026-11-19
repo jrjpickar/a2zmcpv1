@@ -21,11 +21,11 @@ const routes = {
   '/api/jarvis-execute': createExecuteHandler({ openStore }),
   '/api/jarvis-instructions': createInstructionsHandler({ openStore }),
 };
-for (const name of ['metrics', 'mail', 'mail-summary', 'ask', 'alerts', 'diagnostics']) {
+for (const name of ['metrics', 'mail', 'mail-summary', 'mail-filters', 'ask', 'alerts', 'diagnostics']) {
   routes['/api/' + name] = (await import('../netlify/functions/' + name + '.mjs')).default;
 }
 const types = { html: 'text/html; charset=utf-8', js: 'application/javascript', mjs: 'application/javascript', css: 'text/css' };
-const files = new Set(['index.html', 'app.js', 'map.js', 'city3d.js', 'styles.css', 'jarvis.mjs', 'instructions.mjs', 'voice.js', 'voice-vad.js', 'voice.css', 'voice-launch.js', 'voice.html']);
+const files = new Set(['index.html', 'app.js', 'map.js', 'city3d.js', 'styles.css', 'jarvis.mjs', 'jarvis-topics.mjs', 'topic-rules.mjs', 'animation-frame.mjs', 'instructions.mjs', 'voice.js', 'voice-vad.js', 'voice.css', 'voice-launch.js', 'voice.html']);
 const port = Number(process.env.PORT || 4174);
 http.createServer(async (req, res) => {
   try {
@@ -39,7 +39,7 @@ http.createServer(async (req, res) => {
         if (size > (limits[url.pathname] || 65536)) { res.writeHead(413); res.end('Request body exceeds the size limit.'); return; }
         chunks.push(chunk);
       }
-      const response = await fn(new Request(url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks) }));
+      const response = await fn(new Request(url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : Buffer.concat(chunks) }), { openStore });
       res.writeHead(response.status, Object.fromEntries(response.headers));
       res.end(Buffer.from(await response.arrayBuffer()));
       return;

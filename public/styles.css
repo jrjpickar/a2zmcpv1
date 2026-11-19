@@ -33,7 +33,7 @@ body { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
 .brain #map { height: 100%; }
 .hint { position: absolute; left: 16px; bottom: 14px; margin: 0; color: #c9c3ef; font-size: .76rem; pointer-events: none; }
 .float { position: absolute; left: 16px; top: 14px; z-index: 3; font-size: .76rem; background: #10142bd9; backdrop-filter: blur(5px); }
-.brain .detail { position: absolute; z-index: 4; top: 14px; right: 14px; bottom: 14px; width: min(380px, calc(100% - 28px)); overflow: auto; padding: 18px; border: 1px solid #3a3570; border-radius: 16px; background: #10132acc; backdrop-filter: blur(12px); box-shadow: 0 24px 60px -20px #000; animation: slide .22s ease-out; }
+.brain .detail { position: absolute; z-index: 4; top: 14px; right: 14px; bottom: 14px; width: min(380px, calc(100% - 28px)); overflow: auto; padding: 18px; border: 1px solid #3a3570; border-radius: 16px; background: #10132acc; box-shadow: 0 8px 20px #0007; animation: slide .22s ease-out; }
 .brain .detail[hidden] { display: none; }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 .close { position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; padding: 0; border-radius: 50%; font-size: 1.2rem; line-height: 1; }
@@ -187,7 +187,7 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
 .scene:has(#map.live) { background: #0f1222; }
 .c3-canvas { position: absolute; inset: 0; display: block; outline: none; touch-action: pan-y; cursor: grab; }
 .c3-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
-.c3-label { --c: var(--accent); position: absolute; left: 0; top: 0; pointer-events: auto; display: grid; gap: 1px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); border-radius: 10px; background: #10142bd9; backdrop-filter: blur(5px); box-shadow: 0 6px 18px #0007; font-size: .74rem; line-height: 1.25; text-align: left; white-space: nowrap; }
+.c3-label { --c: var(--accent); position: absolute; left: 0; top: 0; pointer-events: auto; display: grid; gap: 1px; padding: 5px 10px; border: 1px solid color-mix(in srgb, var(--c) 55%, transparent); border-radius: 10px; background: #10142bd9; box-shadow: 0 3px 8px #0006; font-size: .74rem; line-height: 1.25; text-align: left; white-space: nowrap; }
 .c3-label b { color: var(--c); font-weight: 700; }
 .c3-label span { font-variant-numeric: tabular-nums; font-weight: 650; }
 .c3-label.tag { padding: 2px 7px; font-size: .64rem; border-radius: 7px; opacity: .92; }
@@ -361,3 +361,18 @@ h2 { font-size: 1.02rem; letter-spacing: -.02em; }
 }
 .brief-bar label[hidden], .brief-bar button[hidden] { display: none; }
 .brief-bar #call-brain { font-weight: 650; }
+
+.jarvis-topics { margin-block: 12px; border: 1px solid #245071; background: #071426; }
+.jarvis-topics canvas { display: block; width: min(100%, 680px); height: auto; margin: auto; }
+.jarvis-topic-controls { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; padding: 8px; }
+.jarvis-topic-controls button { font: .76rem monospace; color: #bbebff; }
+.jarvis-topic-controls button[aria-pressed="true"] { border-color: #59d3ff; background: #123958; }
+
+.jarvis-topics-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(135px, 220px); gap: 10px; align-items: stretch; }
+.jarvis-activity-panel { margin-block: 12px; padding: 10px; border: 1px solid #245071; background: #071426; }
+.jarvis-activity-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px; }
+.jarvis-activity-header h2 { font: .82rem monospace; margin: 0; }
+.jarvis-activity { overflow: auto; max-height: 168px; padding-inline-start: 20px; font: .72rem monospace; }
+@media (max-width: 640px) { .jarvis-topics-layout { grid-template-columns: 1fr; } }
+
+.tab-hidden *, .tab-hidden *::before, .tab-hidden *::after { animation-play-state: paused !important; }

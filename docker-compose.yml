@@ -9,6 +9,7 @@ services:
     env_file: .env
     environment:
       # The VM has IPv6 egress only. Try IPv6 first so Node does not wait on unreachable IPv4 addresses.
+      HOST: 0.0.0.0
       NODE_OPTIONS: --max-old-space-size=320 --dns-result-order=ipv6first
     ports:
       - "127.0.0.1:8080:8080"

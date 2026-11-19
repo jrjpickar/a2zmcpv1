@@ -411,6 +411,13 @@ function mailPanel(panel) {
   const status = node('p', digest.error || digest.notice || (digest.count || digest.done ? plural(digest.count, 'message') + ' summarized' : ''), 'muted');
   status.setAttribute('role', 'status');
   panel.append(status);
+  if (digest.filteredCount) {
+    const filtered = node('details');
+    filtered.append(node('summary', 'View filtered (' + digest.filteredCount + ')'));
+    for (const item of digest.filtered) filtered.append(node('p', [item.subject, item.from, item.reason].filter(Boolean).join(' · ')));
+    if (digest.filteredCount > digest.filtered.length) filtered.append(node('p', 'Showing the latest 200 filtered messages.'));
+    panel.append(filtered);
+  }
   for (const summary of digest.sections) panel.append(node('p', summary, 'mail-summary'));
 }
 
@@ -465,6 +472,8 @@ async function summarizeMailbox() {
       retries = 0;
       if (page.nextCursor && current.cursors.has(page.nextCursor)) throw new Error('The email app returned a repeated mailbox page.');
       current.count += page.summarized;
+      current.filteredCount = (current.filteredCount || 0) + (page.filtered?.length || 0);
+      current.filtered = [...(current.filtered || []), ...(page.filtered || [])].slice(-200);
       if (page.summary) current.sections.push(page.summary);
       current.cursor = page.nextCursor;
       if (current.cursor) current.cursors.add(current.cursor);
@@ -480,7 +489,7 @@ async function summarizeMailbox() {
 }
 
 async function updateMail() {
-  if (!report || report.access?.mailbox === false || document.hidden || $('dashboard').hidden || mailRequest) return;
+  if (liveMail || !report || report.access?.mailbox === false || document.hidden || $('dashboard').hidden || mailRequest) return;
   const request = new AbortController();
   mailRequest = request;
   let next;
@@ -495,6 +504,10 @@ async function updateMail() {
     if (mailRequest === request) mailRequest = null;
   }
   if (request.signal.aborted) return;
+  applyMail(next);
+}
+
+function applyMail(next) {
   if (next.status === 'denied') {
     report.access = { ...report.access, mailbox: false };
     mail = { status: 'loading' };
@@ -520,8 +533,52 @@ async function updateMail() {
   if (arrivals) map.deliverMail?.(arrivals);
 }
 
-setInterval(updateMail, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) updateMail(); });
+let liveMail = false, mailSocket, mailTimer, mailRetry = 1000;
+function stopLiveMail() {
+  clearTimeout(mailTimer);
+  mailTimer = null;
+  const socket = mailSocket;
+  mailSocket = null;
+  socket?.close();
+}
+function syncLiveMail() {
+  if (document.hidden || !report || report.access?.mailbox === false || mailSocket || mailTimer) return;
+  if (!liveMail) {
+    mailTimer = setTimeout(async () => {
+      await updateMail();
+      mailTimer = null;
+      syncLiveMail();
+    }, 30000);
+    return;
+  }
+  const url = new URL('/live', location.href);
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = mailSocket = new WebSocket(url);
+  socket.onopen = () => { mailRetry = 1000; };
+  socket.onmessage = event => {
+    if (mailSocket !== socket || document.hidden) return;
+    const message = JSON.parse(event.data);
+    if (message.type === 'mail') applyMail(message.mail);
+  };
+  socket.onclose = event => {
+    if (mailSocket !== socket) return;
+    mailSocket = null;
+    if (event.code === 1008) { location.replace('/'); return; }
+    mailTimer = setTimeout(() => { mailTimer = null; syncLiveMail(); }, mailRetry);
+    mailRetry = Math.min(30000, mailRetry * 2);
+  };
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    mailRequest?.abort();
+    stopLiveMail();
+  } else {
+    if (!liveMail) void updateMail();
+    syncLiveMail();
+  }
+});
+window.addEventListener('pagehide', stopLiveMail);
+window.addEventListener('pageshow', syncLiveMail);
 
 // fresh: new report data arrived, so rebuild the map.
 function select(id, fresh = false, index = null) {
@@ -934,6 +991,8 @@ async function refresh() {
     });
     if (current.signal.aborted) return;
     if (response.status === 401) {
+      if (response.headers.get('X-A2Z-Login') === 'required') { location.replace('/'); return; }
+      stopLiveMail();
       report = null;
       mailRequest?.abort();
       mailRequest = null;
@@ -958,6 +1017,10 @@ async function refresh() {
     const firstLoad = !report;
     const hadMailbox = report?.access?.mailbox !== false;
     report = next;
+    const useLiveMail = response.headers.get('X-A2Z-Live') === 'websocket';
+    if (useLiveMail !== liveMail || report.access?.mailbox === false) stopLiveMail();
+    liveMail = useLiveMail;
+    syncLiveMail();
     if (report.access?.mailbox === false) {
       mailRequest?.abort();
       mail = { status: 'loading' };
@@ -1005,8 +1068,20 @@ $('range').addEventListener('change', refresh);
 let lastLoad = 0, lastInput = Date.now();
 for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(type, () => { lastInput = Date.now(); }, { passive: true });
 function due() { return Date.now() - lastInput < 10 * 60000 ? 2 * 60000 : 10 * 60000; }
-setInterval(() => { if (!document.hidden && report && Date.now() - lastLoad >= due()) refresh(); }, 15000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && report && Date.now() - lastLoad >= 2 * 60000) refresh(); });
+let reportTimer;
+function scheduleReport() {
+  clearTimeout(reportTimer);
+  if (document.hidden) return;
+  reportTimer = setTimeout(() => {
+    if (report && Date.now() - lastLoad >= due()) void refresh();
+    scheduleReport();
+  }, Math.max(15000, report ? due() - (Date.now() - lastLoad) : 120000));
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && report && Date.now() - lastLoad >= 2 * 60000) void refresh();
+  scheduleReport();
+});
+scheduleReport();
 $('signin').addEventListener('submit', event => {
   event.preventDefault();
   key = $('key').value.trim();
@@ -1021,6 +1096,39 @@ $('daily').checked = store.get('daily', 'off') === 'on';
 $('daily').addEventListener('change', () => { store.set('daily', $('daily').checked ? 'on' : 'off'); if ($('daily').checked) autoBrief(); });
 $('close').addEventListener('click', () => select(null));
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && selected) select(null); });
+
+const filterForm = $('mail-filter-form');
+async function loadMailFilterSettings(method, body) {
+  const button = filterForm.querySelector('button');
+  const status = $('mail-filter-status');
+  button.disabled = true;
+  status.textContent = method === 'GET' ? 'Loading filters' : 'Saving filters';
+  try {
+    const response = await fetch('/api/mail-filters', {
+      method, body, headers: authHeaders(body ? { 'Content-Type': 'application/json' } : {}),
+    });
+    const filters = await response.json();
+    if (!response.ok) throw new Error(filters.error);
+    $('mail-filter-allow').value = filters.allowlist.join('\n');
+    $('mail-filter-block').value = filters.blocklist.join('\n');
+    status.textContent = method === 'PUT' ? 'Filters saved' : '';
+    button.disabled = false;
+  } catch (error) {
+    status.textContent = error.message || 'Mail filter settings are unavailable.';
+    button.disabled = method === 'GET';
+  }
+}
+$('mail-filter-settings').addEventListener('toggle', event => {
+  if (event.target.open) void loadMailFilterSettings('GET');
+});
+filterForm.addEventListener('submit', event => {
+  event.preventDefault();
+  const entries = id => $(id).value.split(/[,\n]/).map(entry => entry.trim()).filter(Boolean);
+  void loadMailFilterSettings('PUT', JSON.stringify({
+    allowlist: entries('mail-filter-allow'),
+    blocklist: entries('mail-filter-block'),
+  }));
+});
 
 // ---------------- alerts ----------------
 function triggered() { return report?.alerts || alertView?.alerts || []; }

@@ -68,6 +68,16 @@
         <p id="alert-status" class="muted" role="status"></p>
       </form>
       <div id="rules"></div>
+      <details id="mail-filter-settings" class="surface rule-group">
+        <summary>Mailbox summary filters</summary>
+        <form id="mail-filter-form">
+          <p class="muted">Enter one email address or @domain per line.</p>
+          <label class="field"><span>Allowlist</span><textarea id="mail-filter-allow" rows="4"></textarea></label>
+          <label class="field"><span>Blocklist</span><textarea id="mail-filter-block" rows="4"></textarea></label>
+          <button type="submit" class="primary" disabled>Save mailbox filters</button>
+          <p id="mail-filter-status" role="status"></p>
+        </form>
+      </details>
     </section>
     <section id="health" class="settings" aria-labelledby="health-title" hidden>
       <div class="settings-head health-head">
