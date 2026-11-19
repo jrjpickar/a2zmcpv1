@@ -1,7 +1,7 @@
 // Mailbox snapshot for the JARVIS Email agent. Reads the A2Z email app's command-center endpoint
 // (the same one the Mail district uses) and keeps a short snapshot in JARVIS storage. No Groq calls here.
-// Env: MCP_COMMAND_CENTER_TOKEN (required), JARVIS_EMAIL_URL (optional HTTPS override), JARVIS_EMAIL_PAGES (1 to 4, default 2).
-import { commandCenterUrl } from './mail.mjs';
+// The optional JARVIS_EMAIL_URL overrides the counters endpoint only.
+import { commandCenterUrl, inboxPage } from './mail-feed.mjs';
 
 export const MAIL_KEY = 'mail/snapshot';
 const maxAgeMs = 15 * 60000;
@@ -21,7 +21,8 @@ export function mailSettings(env = process.env) {
     url = custom.href;
   }
   const pages = Math.min(4, Math.max(1, Number.parseInt(env.JARVIS_EMAIL_PAGES, 10) || 2));
-  return { token, url, pages, enabled: Boolean(token) && env.JARVIS_EMAIL_SYNC !== 'off' };
+  const mailToken = env.MCP_MAIL_TOKEN?.trim();
+  return { token, mailToken, url, pages, enabled: Boolean(token && mailToken) && env.JARVIS_EMAIL_SYNC !== 'off' };
 }
 
 export const sampleMailbox = () => ({
@@ -37,7 +38,7 @@ export const sampleMailbox = () => ({
 
 export async function fetchMailbox({ env = process.env, fetchImpl = fetch } = {}) {
   if (env.DATA_MODE === 'sample') return sampleMailbox();
-  const { token, url, pages } = mailSettings(env);
+  const { token, mailToken, url, pages } = mailSettings(env);
   if (!token) throw fail('Set MCP_COMMAND_CENTER_TOKEN so the Email agent can read the mailbox.', 503);
   const get = async target => {
     const response = await fetchImpl(target, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(8000) });
@@ -46,15 +47,14 @@ export async function fetchMailbox({ env = process.env, fetchImpl = fetch } = {}
   };
   const { stats = null, asOf = null } = await get(url);
   const messages = [];
-  let cursor = null, messagesAvailable = true;
-  for (let page = 0; page < pages; page++) {
-    const target = new URL(url);
-    target.searchParams.set('view', 'messages');
-    target.searchParams.set('limit', '5');
-    if (cursor) target.searchParams.set('cursor', cursor);
+  let cursor = null, messagesAvailable = false;
+  for (let page = 0; mailToken && page < pages; page++) {
     let data;
-    try { data = await get(target); } catch { messagesAvailable = page > 0; break; }
-    if (!Array.isArray(data?.messages)) { messagesAvailable = page > 0; break; }
+    try { data = await inboxPage({ token: mailToken, cursor, fetchImpl }); } catch (error) {
+      if (page === 0) throw error;
+      break;
+    }
+    messagesAvailable = true;
     for (const message of data.messages.slice(0, 5)) {
       if (typeof message?.subject !== 'string' || typeof message.text !== 'string') continue;
       messages.push({
@@ -64,7 +64,7 @@ export async function fetchMailbox({ env = process.env, fetchImpl = fetch } = {}
         text: excerpt(message.text, 700),
       });
     }
-    cursor = typeof data.nextCursor === 'string' && data.nextCursor.length <= 1000 && data.nextCursor !== cursor ? data.nextCursor : null;
+    cursor = data.nextCursor;
     if (!cursor) break;
   }
   return { source: 'email-app', syncedAt: new Date().toISOString(), asOf: typeof asOf === 'string' ? asOf : null, stats, messages, messagesAvailable };

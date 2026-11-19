@@ -99,11 +99,17 @@ test('Marketplace OAuth installs only the configured location and consumes callb
 test('Groq summaries keep the mailbox page bounded and handle retries without losing the cursor', async () => {
   let completions = 0;
   const fetchImpl = async (url, init) => {
-    if (String(url).includes('command-center')) {
-      const query = new URL(url).searchParams;
-      assert.equal(query.get('cursor'), 'cursor-1');
-      assert.equal(query.get('limit'), '5');
-      return Response.json({ messages: [{ id: 'msg', subject: 'Crew call', text: '⚙'.repeat(4000) }], nextCursor: 'cursor-2' });
+    const { pathname, searchParams } = new URL(url);
+    if (pathname === '/api/mcp/mail/messages') {
+      assert.equal(init.headers.Authorization, 'Bearer fixture');
+      assert.equal(searchParams.get('uidValidity'), '42');
+      assert.equal(searchParams.get('before'), '10');
+      assert.equal(searchParams.get('limit'), '5');
+      return Response.json({ messages: [{ id: 'INBOX:42:9' }], uidValidity: '42', hasMore: true, next: 9 });
+    }
+    if (pathname === '/api/mcp/mail/message') {
+      assert.equal(searchParams.get('id'), 'INBOX:42:9');
+      return Response.json({ subject: 'Crew call', body: '⚙'.repeat(4000) });
     }
     const payload = JSON.parse(init.body);
     assert.equal(payload.model, 'openai/gpt-oss-120b');
@@ -114,11 +120,11 @@ test('Groq summaries keep the mailbox page bounded and handle retries without lo
     if (completions === 2) return Response.json({ choices: [{ finish_reason: 'length', message: { content: 'Incomplete' } }] });
     return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'Confirm crew availability.' } }] });
   };
-  const run = () => summarizePage({ token: 'fixture', apiKey: 'key', cursor: 'cursor-1', fetchImpl });
+  const run = () => summarizePage({ token: 'fixture', apiKey: 'key', cursor: '42:10', fetchImpl });
   await assert.rejects(run, error => error.retryAfter === 9);
   await assert.rejects(run, /Incomplete summary/);
   const result = await run();
-  assert.deepEqual(result, { summarized: 1, summary: 'Confirm crew availability.', nextCursor: 'cursor-2' });
+  assert.deepEqual(result, { summarized: 1, summary: 'Confirm crew availability.', nextCursor: '42:9' });
   assert.deepEqual(await run(), result);
   assert.equal(completions, 3);
 });

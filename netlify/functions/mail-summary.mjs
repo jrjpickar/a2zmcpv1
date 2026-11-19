@@ -10,9 +10,9 @@ export default async (request, { fetchImpl = fetch } = {}) => {
     return json({ error: 'Dashboard key required' }, 401);
   }
   if (!access.mailbox) return json({ error: 'Mailbox access denied' }, 403);
-  const token = process.env.MCP_COMMAND_CENTER_TOKEN?.trim();
+  const token = process.env.MCP_MAIL_TOKEN?.trim();
   const apiKey = process.env.GROQ_API_KEY?.trim();
-  if (!token || !apiKey) return json({ error: 'Set MCP_COMMAND_CENTER_TOKEN and GROQ_API_KEY in Netlify Functions.' }, 503);
+  if (!token || !apiKey) return json({ error: 'Set MCP_MAIL_TOKEN and GROQ_API_KEY in Netlify Functions.' }, 503);
   let cursor;
   try {
     const text = await request.text();
@@ -24,7 +24,7 @@ export default async (request, { fetchImpl = fetch } = {}) => {
   }
   try {
     const page = await summarizePage({ token, cursor, apiKey, model: process.env.GROQ_MODEL, fetchImpl });
-    return page ? json({ status: 'ok', ...page }) : json({ error: 'Mailbox summaries need the A2Z Email Inbox app to serve message pages (view=messages). Mail counts still work.' }, 501);
+    return json({ status: 'ok', ...page });
   } catch (error) {
     if (error.retryAfter) return json({ error: 'Waiting for the mailbox or Groq rate limit.' }, 429, { 'Retry-After': String(error.retryAfter) });
     return json({ error: 'Could not summarize this mailbox page. Try again to resume.' }, 502);

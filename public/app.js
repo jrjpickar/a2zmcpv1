@@ -86,6 +86,7 @@ let pending;
 let mail = { status: 'loading' };
 let previousUnread = null;
 let previousArrival = null;
+let commandCenter = {};
 let digest = { sections: [], count: 0, cursor: null };
 let mailRequest;
 const map = window.A2ZCity?.supported() ? city3d() : setupMap($('city'), $('stations'), id => select(id, true));
@@ -382,9 +383,27 @@ function mailPanel(panel) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   panel.append(link);
+  const queuesButton = node('button', commandCenter.pending ? 'Loading…' : 'Load Command Center');
+  queuesButton.type = 'button';
+  queuesButton.disabled = Boolean(commandCenter.pending);
+  queuesButton.addEventListener('click', loadCommandCenter);
+  panel.append(queuesButton);
+  if (commandCenter.error) panel.append(node('p', commandCenter.error, 'muted'));
+  if (commandCenter.data) {
+    const { queues, recent } = commandCenter.data;
+    for (const [label, items] of [
+      ['Bid deadlines', queues.bids], ['Urgent correspondence', queues.urgent],
+      ['Awaiting a reply', queues.unanswered], ['Unread invoice mail', queues.invoices],
+      ['Recent activity', recent],
+    ]) {
+      panel.append(node('h3', label));
+      if (!items.length) panel.append(node('p', 'No messages', 'muted'));
+      for (const item of items) panel.append(node('p', [item.subject, item.from, item.due].filter(Boolean).join(' · ')));
+    }
+  }
   const button = node('button', digest.running ? 'Summarizing…' : digest.error && digest.cursor ? 'Resume summary' : 'Summarize mailbox');
   button.type = 'button';
-  button.disabled = digest.running || (!mail.stats && !digest.error);
+  button.disabled = digest.running;
   button.addEventListener('click', summarizeMailbox);
   const controls = node('div', undefined, 'actions');
   controls.append(button);
@@ -397,6 +416,22 @@ function mailPanel(panel) {
 
 function refreshMailPanel() {
   if (selected === 'mail' && report) details(tiles().find(tile => tile.key === 'mail'));
+}
+
+async function loadCommandCenter() {
+  const state = commandCenter = { pending: true };
+  refreshMailPanel();
+  try {
+    const response = await fetch('/api/mail?view=command-center', { headers: authHeaders(), cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Command Center is unavailable.');
+    state.data = data;
+  } catch (error) {
+    state.error = error.message;
+  } finally {
+    state.pending = false;
+    if (commandCenter === state) refreshMailPanel();
+  }
 }
 
 async function summarizeMailbox() {
@@ -464,6 +499,7 @@ async function updateMail() {
     report.access = { ...report.access, mailbox: false };
     mail = { status: 'loading' };
     previousArrival = previousUnread = null;
+    commandCenter = {};
     digest = { sections: [], count: 0, cursor: null };
     select(selected === 'mail' ? null : selected, true, worker);
     return;
@@ -904,6 +940,7 @@ async function refresh() {
       mail = { status: 'loading' };
       previousUnread = null;
       previousArrival = null;
+      commandCenter = {};
       digest = { sections: [], count: 0, cursor: null };
       key = '';
       if (highlevelMode) highlevelSession = null;
@@ -925,6 +962,7 @@ async function refresh() {
       mailRequest?.abort();
       mail = { status: 'loading' };
       previousArrival = previousUnread = null;
+      commandCenter = {};
       digest = { sections: [], count: 0, cursor: null };
       if (selected === 'mail') selected = null;
     }

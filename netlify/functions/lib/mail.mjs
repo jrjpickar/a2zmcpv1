@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DEFAULT_MODEL, groqReasoningOptions } from './groq.mjs';
 
-export const commandCenterUrl = 'https://a2zemails.netlify.app/api/mcp/command-center';
+import { inboxPage } from './mail-feed.mjs';
 export const mailSample = {
   status: 'ok',
   summarized: 4,
@@ -9,7 +9,6 @@ export const mailSample = {
   summary: '• Estimating: A bid invitation needs scope review by Friday.\n• Dispatch: Confirm six workers for Thursday and share the 6:30 AM check-in location.\n• Billing: Match the supplier invoice to the purchase order before approval.',
 };
 
-const pageSize = 5;
 const summaries = new Map();
 
 function throttle(response, fallback) {
@@ -24,30 +23,8 @@ function excerpt(text, bytes) {
 }
 
 export async function summarizePage({ token, cursor, apiKey, model, fetchImpl = fetch }) {
-  const url = new URL(commandCenterUrl);
-  url.searchParams.set('view', 'messages');
-  url.searchParams.set('limit', String(pageSize));
-  if (cursor) url.searchParams.set('cursor', cursor);
-  const upstream = await fetchImpl(url, {
-    headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
-    redirect: 'error',
-    signal: AbortSignal.timeout(9000),
-  });
-  if (upstream.status === 429) throttle(upstream, 60);
-  if (!upstream.ok) throw new Error('Mailbox page unavailable');
-  const { messages, nextCursor } = await upstream.json();
-  if (!Array.isArray(messages)) return null;
-  if (messages.length > pageSize || (nextCursor !== null &&
-      (typeof nextCursor !== 'string' || !nextCursor || nextCursor.length > 1000 || nextCursor === cursor || !messages.length))) {
-    throw new Error('Invalid mailbox page');
-  }
-  for (const message of messages) {
-    if (typeof message?.id !== 'string' || !message.id ||
-        typeof message.subject !== 'string' || typeof message.text !== 'string') {
-      throw new Error('Invalid mailbox message');
-    }
-  }
-  if (!messages.length) return { summarized: 0, summary: '', nextCursor: null };
+  const { messages, nextCursor } = await inboxPage({ token, cursor, fetchImpl });
+  if (!messages.length) return { summarized: 0, summary: '', nextCursor };
   const excerpts = messages.map(({ subject, text, receivedAt }) => ({
     subject: excerpt(subject.slice(0, 300), 300),
     text: excerpt(text, 2000),

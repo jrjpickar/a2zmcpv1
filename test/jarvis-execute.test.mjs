@@ -149,11 +149,15 @@ test('Email agent mailbox: pages from the email app, snapshot cache and stale fa
     const u = new URL(url);
     seen.push(u.search);
     assert.equal(u.origin, 'https://a2zemails.netlify.app');
-    if (!u.searchParams.get('view')) return Response.json({ stats: { unreadIncoming: 4 }, asOf: '2026-11-18T16:00:00Z' });
-    const cursor = u.searchParams.get('cursor');
-    return Response.json({ messages: [{ id: cursor || 'a', subject: 'Subject ' + (cursor || 'a'), text: 'x'.repeat(2000), receivedAt: '2026-11-18T15:00:00Z' }], nextCursor: cursor ? null : 'p2' });
+    if (u.pathname.endsWith('/command-center')) return Response.json({ stats: { unreadIncoming: 4 }, asOf: '2026-11-18T16:00:00Z' });
+    if (u.pathname.endsWith('/messages')) {
+      const before = u.searchParams.get('before');
+      return Response.json({ messages: [{ id: before ? 'INBOX:42:1' : 'INBOX:42:2' }],
+        uidValidity: '42', hasMore: !before, next: before ? null : 2 });
+    }
+    return Response.json({ subject: 'Subject', body: 'x'.repeat(2000), date: '2026-11-18T15:00:00Z' });
   };
-  const mailEnv = { MCP_COMMAND_CENTER_TOKEN: 'token', JARVIS_EMAIL_PAGES: '3' };
+  const mailEnv = { MCP_COMMAND_CENTER_TOKEN: 'token', MCP_MAIL_TOKEN: 'mail-token', JARVIS_EMAIL_PAGES: '3' };
   const snapshot = await fetchMailbox({ env: mailEnv, fetchImpl });
   assert.equal(snapshot.messages.length, 2);
   assert.equal(snapshot.messages[0].text.length, 700, 'message text is clipped');

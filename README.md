@@ -25,28 +25,20 @@ Set runtime variables in each site's Netlify settings. Generate distinct, random
 
 ### Mail district
 
-Set `MCP_COMMAND_CENTER_TOKEN` in **A2Z Operations → Netlify environment variables**, scoped to **Functions**. Use the same generated token as the A2Z Email Inbox site. Operations sends it server-side to `GET https://a2zemails.netlify.app/api/mcp/command-center` as a bearer token. Redeploy Operations after setting it.
+Set these variables in **Production → Functions** and redeploy the Email Inbox first, then Operations. Generate a different random value for each mailbox token with `openssl rand -hex 32`, then copy the corresponding value to both sites.
 
-The Mail district shows recent statistics for the single mailbox configured on the email site. It uses the dashboard's existing access key, so use a mailbox whose counts all dashboard key holders may see. The district links to the email app, where users sign in to read their own mail. Sample mode uses fixture counts and never calls the email site.
+| Variable | Where to set it | Purpose |
+| --- | --- | --- |
+| `MCP_COMMAND_CENTER_TOKEN` | Both sites | Counts only. Keep the current working value. |
+| `MCP_MAIL_TOKEN` | Both sites | Mail list and body reads, Command Center queues, summaries, and JARVIS mailbox snapshots. |
+| `MCP_MAIL_DRAFT_TOKEN` | Both sites | Creates drafts in the Inbox app's Drafts view. |
+| `MCP_IONOS_EMAIL`, `IONOS_ALLOWED_MAILBOXES`, `A2Z_MODE=live` | Email Inbox | Select and allow the integration mailbox. Provide its password through the existing HighLevel credential mapping or `MCP_IONOS_PASSWORD`. |
+| `GROQ_API_KEY`, optional `GROQ_MODEL` | Operations | Enables the dashboard's AI summary of the INBOX folder. |
+| `MCP_KEY` | Operations | Existing bearer key for `/mcp`. For the standalone server, use `MCP_AUTH_TOKEN` in its `.env`, along with the mailbox tokens. |
 
-On a visible dashboard, Mail checks every 30 seconds. The first successful check sets the baseline. Later increases send up to five envelopes into the stack. Add `arrivalSequence` to the existing stats response to animate actual deliveries. This must be a durable, monotonically increasing integer for the configured mailbox, incremented once per new incoming delivery irrespective of read state. Keep it stable across polling, deploys and folder changes. Until it is present, the animation follows net increases in unread incoming mail.
+The dashboard Mail district keeps polling counts and can load Command Center queues on demand. Summaries send subjects and up to 2,000 UTF-8 bytes of plain text per message to Groq. Attachments are excluded. The mailbox scope is the single account set in `MCP_IONOS_EMAIL`, and dashboard mail access follows the existing dashboard or HighLevel authorization.
 
-**Summarize mailbox** uses `GROQ_API_KEY` and the optional existing `GROQ_MODEL`. On request, the server sends subjects and up to 2,000 UTF-8 bytes of plain text per message to Groq. It displays the result page by page for the whole mailbox. Attachments are excluded. The dashboard's current access key also grants access to summaries, so use a mailbox whose contents all key holders are authorized to see.
-
-Extend the email app's existing bearer-protected endpoint as follows:
-
-- `GET /api/mcp/command-center` keeps its existing `stats`, `asOf` and `coverage` fields. Add `arrivalSequence` as described above.
-- `GET /api/mcp/command-center?view=messages&limit=5` returns the first page of the configured mailbox. Honor the requested limit. Include all read and unread messages across the folders the email app exposes for this integration, without duplicates. Use a stable ordering and an opaque cursor that continues the same traversal even when new mail arrives.
-- `GET /api/mcp/command-center?view=messages&limit=5&cursor=…` returns the next page. Return `nextCursor: null` on the last page. Continue enforcing the same bearer token and mailbox allowlist. Send plain text only.
-
-```json
-{
-  "messages": [
-    { "id": "stable-id", "subject": "Crew confirmation", "text": "Please confirm six workers.", "receivedAt": "2026-11-17T20:00:00Z" }
-  ],
-  "nextCursor": null
-}
-```
+Reconnect the MCP client after deployment to refresh its tools. The read token enables `a2z_mail_folders`, `a2z_mail_list`, `a2z_mail_read` and `a2z_mail_command_center`. The draft token enables `a2z_mail_create_draft`. MCP clients authenticate with the Operations MCP key. Anyone holding that key has access to the mailbox tools you enable, so rotate it if it was shared for reports only. Save drafts with a new UUID and reuse it for retries. Open **Drafts** in the Email Inbox while signed in as the integration mailbox to review, edit, and send manually.
 
 Run `npm run build:city` followed by `node scripts/build-sandbox.mjs` to preview the district and sample summaries locally.
 
@@ -153,8 +145,8 @@ The JARVIS tab (admins only) runs LangGraph agents on Groq `openai/gpt-oss-20b`.
 | Variable | Purpose |
 | --- | --- |
 | `GROQ_API_KEY` | Required for agents. Optional `JARVIS_GROQ_MODEL` overrides `openai/gpt-oss-20b` |
-| `MCP_COMMAND_CENTER_TOKEN` | Existing token. The Email agent reads the email app with it. `jarvis-mail-sync` refreshes a snapshot every 30 minutes with no Groq calls |
-| `JARVIS_EMAIL_URL`, `JARVIS_EMAIL_PAGES`, `JARVIS_EMAIL_SYNC` | Optional HTTPS override of the command-center URL, pages of 5 messages per sync (1 to 4, default 2), and `off` to stop the sync |
+| `MCP_COMMAND_CENTER_TOKEN`, `MCP_MAIL_TOKEN` | Counters and message bodies. `jarvis-mail-sync` refreshes a snapshot every 30 minutes with no Groq calls |
+| `JARVIS_EMAIL_URL`, `JARVIS_EMAIL_PAGES`, `JARVIS_EMAIL_SYNC` | Optional HTTPS override of the command-center URL, INBOX pages of 5 messages per sync (1 to 4, default 2), and `off` to stop the sync |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Optional. Moves JARVIS storage from the Netlify Blobs store `a2z-jarvis` to the Supabase table in `supabase/migrations`. Run that SQL in the Supabase SQL editor first. Keep the service key in Netlify Functions only |
 | `JARVIS_EXECUTE` | `off` disables the execution sandbox |
 
@@ -212,5 +204,3 @@ Main only delegates to an agent whose key is set. "Second opinion" goes to Gemin
 1. At api.slack.com/apps, create a new app from the manifest `deploy/slack-manifest.yml`. Set its request URL to `https://<operations-domain>/api/slack/events`, then install it to the workspace.
 2. In Netlify Functions, set `SLACK_BOT_TOKEN` (`xoxb-`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USERS` (your Slack member ID, comma separated, required) and optionally `SLACK_BRIEFING_CHANNEL` (a channel ID; invite JARVIS to it). `DASHBOARD_KEY` must be set. Redeploy.
 3. DM JARVIS or @mention it. Prefixes: `email:`, `systems:`, `dev:`, `qc:`, `gemini:`, `workers:` or a bot name. You can also use `remember:`, `remember for all agents:`, :+1: / :-1: reactions (feedback), `run plan` (sandbox only), `new chat` and `help`. Events are acknowledged right away and processed by `slack-worker-background`. Messages from users not listed in `SLACK_ALLOWED_USERS` are ignored. The weekday briefing posts at 7:05 AM Pacific (15:05 UTC, so 8:05 AM during daylight saving time).
-
-**Mailbox summaries** need the A2Z Email Inbox app to answer `GET /api/mcp/command-center?view=messages&limit=5&cursor=<c>` with `{ "messages": [{ "id", "subject", "text", "receivedAt", "from"? }], "nextCursor": string|null }`, using the same bearer token. Until then, counts work, and summaries and the Email agent's message reads say so.
