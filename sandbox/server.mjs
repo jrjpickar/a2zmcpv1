@@ -21,7 +21,7 @@ const routes = {
   '/api/jarvis-execute': createExecuteHandler({ openStore }),
   '/api/jarvis-instructions': createInstructionsHandler({ openStore }),
 };
-for (const name of ['metrics', 'mail', 'mail-summary', 'mail-filters', 'ask', 'alerts', 'diagnostics']) {
+for (const name of ['metrics', 'mail', 'mail-summary', 'mail-filters', 'jarvis-diagnostics', 'ask', 'alerts', 'diagnostics']) {
   routes['/api/' + name] = (await import('../netlify/functions/' + name + '.mjs')).default;
 }
 const types = { html: 'text/html; charset=utf-8', js: 'application/javascript', mjs: 'application/javascript', css: 'text/css' };

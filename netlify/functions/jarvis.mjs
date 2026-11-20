@@ -1,3 +1,4 @@
+import { createGroqFailover } from './lib/jarvis-failover.mjs';
 // POST /api/jarvis { role, prompt, threadId?, newThread?, previousTask?, preset?, plan? }
 // Admin dashboard access, same origin and JSON required. Without threadId/newThread the call is stateless and touches no chat storage.
 import { cloudflareModel, CLOUDFLARE_MODEL, compileAgents, failure, geminiModel, GEMINI_MODEL, groqModel, JARVIS_MODEL, agentNames, builtinRoles, rolePattern } from './lib/jarvis-agents.mjs';
@@ -32,6 +33,9 @@ function assistantRecord(result) {
 
 export function createJarvisHandler({ env = process.env, fetchImpl = fetch, readSystems = systemContext, readMail = null, openStore = () => openJarvisStore(env), classifier } = {}) {
   let running = false;
+  const primary = env.JARVIS_GROQ_MODEL?.trim() || JARVIS_MODEL;
+  const backup = env.JARVIS_GROQ_BACKUP_MODEL?.trim();
+  const transport = backup && backup !== primary ? createGroqFailover({ primary, backup, openStore, fetchImpl }) : fetchImpl;
   return async function handler(request) {
     const { access, response } = guard(request, { env });
     if (response) return response;
@@ -135,7 +139,7 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     running = true;
     try {
       const usage = { total: 0, calls: 0 };
-      const model = groqModel(key, fetchImpl, { model: env.JARVIS_GROQ_MODEL?.trim() || JARVIS_MODEL, usage });
+      const model = groqModel(key, transport, { model: primary, usage });
       const budget = Math.min(20000, Math.max(1000, Number(env.JARVIS_HISTORY_CHARS) || limits.historyBudget));
       const history = memory ? historyFor(thread, budget) : [];
       let custom = '';

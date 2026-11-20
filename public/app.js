@@ -595,11 +595,11 @@ function select(id, fresh = false, index = null) {
   else details(values.find(tile => tile.key === selected));
 }
 
-// ---------------- JARVIS agents in the city ----------------
-// Admin only (same rule as the JARVIS tab). Each agent is a robot around HQ. Click one to prompt it.
-// Chats are saved as normal JARVIS threads, so they also show in the JARVIS tab.
+// ---------------- Jose agents in the city ----------------
+// Admin only (same rule as the Jose tab). Each agent is a robot around HQ. Click one to prompt it.
+// Chats are saved as normal Jose threads, so they also show in the Jose tab.
 const AGENTS = [
-  { id: 'main', name: 'JARVIS', color: '#ffb547', greeting: 'JARVIS online. Ask anything. I hand it to Email, Systems, Development or one of your bots.' },
+  { id: 'main', name: 'Jose', color: '#ffb547', greeting: 'Jose online. Ask anything. I hand it to Email, Systems, Development or one of your bots.' },
   { id: 'email', name: 'Email', color: '#e8aa79', greeting: 'Email agent. Ask about unread mail, bid invitations, invoices and deadlines.', watch: ['mail'] },
   { id: 'systems', name: 'Systems', color: '#7fb2ff', greeting: 'Systems and KPIs. Ask about leads, wins, pipelines, crews, runway or system health.',
     watch: ['leads', 'proposals', 'wins', 'pipelines', 'labor', 'workforce', 'runway', 'system'] },
@@ -701,7 +701,7 @@ function agentMessage(message, agent) {
   if (message.id && message.role === 'assistant' && !message.error) item.append(rateBar(message, agent));
   return item;
 }
-// Teach from the city: the same feedback the JARVIS tab sends.
+// Teach from the city: the same feedback the Jose tab sends.
 function rateBar(message, agent) {
   const bar = node('div', undefined, 'agent-rate');
   const chat = chatFor(agent.id);
@@ -813,7 +813,7 @@ function agentPanel(agent) {
   const mic = node('button', 'Mic'); mic.type = 'button'; mic.hidden = !Recognition; mic.disabled = chat.busy;
   const voice = node('button', voiceOn ? 'Voice on' : 'Voice off', voiceOn ? 'on' : ''); voice.type = 'button'; voice.hidden = !window.speechSynthesis;
   voice.setAttribute('aria-pressed', String(voiceOn));
-  const full = node('a', 'Open in JARVIS'); full.href = '#jarvis'; full.className = 'agent-link';
+  const full = node('a', 'Open in Jose'); full.href = '#jarvis'; full.className = 'agent-link';
   const actions = node('div', undefined, 'agent-actions');
   actions.append(full, node('span'), voice, mic, fresh, send);
   form.append(input, actions);
@@ -850,7 +850,7 @@ async function sendToAgent(agent, text) {
       delete body.threadId; body.newThread = true;
       ({ response, data } = await postJarvis(body));
     }
-    if (!response.ok) throw new Error(data.error || 'JARVIS request failed (HTTP ' + response.status + ').');
+    if (!response.ok) throw new Error(data.error || 'Jose request failed (HTTP ' + response.status + ').');
     if (data.threadId) chat.threadId = data.threadId;
     // Delegation: a packet flies out to each agent in the trace, then the answer flies back.
     const trace = [agent.id, ...(data.trace || []).filter(id => id !== agent.id && id !== 'execute')];
@@ -872,7 +872,7 @@ async function sendToAgent(agent, text) {
     }, delay * 1000);
     return;
   } catch (error) {
-    chat.messages.push({ role: 'assistant', content: error.message || 'JARVIS request failed.', error: true });
+    chat.messages.push({ role: 'assistant', content: error.message || 'Jose request failed.', error: true });
     map.agentState?.(agent.id, 'error');
     map.agentSay?.(agent.id, error.message || 'Request failed.');
   }
@@ -880,11 +880,11 @@ async function sendToAgent(agent, text) {
   redraw();
 }
 
-// "Ask JARVIS about this" on every district panel.
+// "Ask Jose about this" on every district panel.
 function askAbout(tile) {
   const main = cityAgents().find(a => a.id === 'main');
   if (!main || !tile) return null;
-  const button = node('button', 'Ask JARVIS about this', 'agent-ask'); button.type = 'button';
+  const button = node('button', 'Ask Jose about this', 'agent-ask'); button.type = 'button';
   button.addEventListener('click', () => {
     const firing = triggered().filter(a => a.district === tile.key).map(a => a.message);
     const facts = [tile.value, tile.sub].filter(Boolean).join(', ');
@@ -950,10 +950,10 @@ function newBotPanel() {
   $('detail').hidden = false;
   $('detail-title').textContent = 'Create a bot';
   const panel = $('detail-content');
-  panel.replaceChildren(node('p', 'Give it a job. JARVIS will hand it matching requests, and it gets its own robot in the city.', 'muted'));
+  panel.replaceChildren(node('p', 'Give it a job. Jose will hand it matching requests, and it gets its own robot in the city.', 'muted'));
   const form = node('form', undefined, 'agent-form');
   const name = node('input'); name.maxLength = 40; name.required = true; name.placeholder = 'Name, e.g. Bid Coach';
-  const description = node('input'); description.maxLength = 200; description.placeholder = 'What it is for (JARVIS uses this to delegate)';
+  const description = node('input'); description.maxLength = 200; description.placeholder = 'What it is for (Jose uses this to delegate)';
   const instructions = node('textarea'); instructions.maxLength = 1500; instructions.required = true; instructions.rows = 4; instructions.placeholder = 'Instructions for this bot';
   const context = node('select');
   context.append(new Option('A2Z metrics', 'metrics'), new Option('Mailbox snapshot', 'mail'), new Option('No data', 'none'));
@@ -1252,7 +1252,7 @@ function route() {
   if (view === 'jarvis') loadJarvis();
 }
 
-// JARVIS loads on first visit so the city view stays as light as before.
+// Jose loads on first visit so the city view stays as light as before.
 let jarvisPanel = null;
 async function loadJarvis() {
   try {
@@ -1260,7 +1260,7 @@ async function loadJarvis() {
     if (!jarvisPanel.isConnected) $('jarvis').replaceChildren(jarvisPanel);
     jarvisPanel.load();
   } catch {
-    $('jarvis').replaceChildren(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'JARVIS is available on the deployed site or with npm run sandbox.' }));
+    $('jarvis').replaceChildren(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'Jose is available on the deployed site or with npm run sandbox.' }));
   }
 }
 

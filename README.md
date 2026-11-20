@@ -206,3 +206,12 @@ Main only delegates to an agent whose key is set. "Second opinion" goes to Gemin
 1. At api.slack.com/apps, create a new app from the manifest `deploy/slack-manifest.yml`. Set its request URL to `https://<operations-domain>/api/slack/events`, then install it to the workspace.
 2. In Netlify Functions, set `SLACK_BOT_TOKEN` (`xoxb-`), `SLACK_SIGNING_SECRET`, `SLACK_ALLOWED_USERS` (your Slack member ID, comma separated, required) and optionally `SLACK_BRIEFING_CHANNEL` (a channel ID; invite JARVIS to it). `DASHBOARD_KEY` must be set. Redeploy.
 3. DM JARVIS or @mention it. Prefixes: `email:`, `systems:`, `dev:`, `qc:`, `gemini:`, `workers:` or a bot name. You can also use `remember:`, `remember for all agents:`, :+1: / :-1: reactions (feedback), `run plan` (sandbox only), `new chat` and `help`. Events are acknowledged right away and processed by `slack-worker-background`. Messages from users not listed in `SLACK_ALLOWED_USERS` are ignored. The weekday briefing posts at 7:05 AM Pacific (15:05 UTC, so 8:05 AM during daylight saving time).
+
+
+### Jose model failover
+
+Set `JARVIS_GROQ_BACKUP_MODEL` to a different Groq model available to the existing `GROQ_API_KEY`, such as `openai/gpt-oss-120b` when the primary is `openai/gpt-oss-20b`. The primary is set by `JARVIS_GROQ_MODEL` and defaults to `openai/gpt-oss-20b`. Configure the backup in the VM .env or in the Operations Netlify project's Production Functions environment. Recreate the standalone service to load .env changes. For Netlify, redeploy after changing the Production Functions environment.
+
+Jose's System Diagnostics sphere shows the verified Groq state and recent events. A recovery check runs on the next request after the primary's cooldown. The backup must support the structured output and tool features used by the primary. Open the sphere and select **Refresh** to reload saved results without making a provider test call. Diagnostic records use the existing JARVIS store, with Supabase on the production VM.
+
+For local browser checks, set `JARVIS_PLAYWRIGHT_MODULE` to an installed Playwright module and optionally set `JARVIS_CHROME` to the Chrome executable. Run `node scripts/check-jarvis-circuit.mjs`.

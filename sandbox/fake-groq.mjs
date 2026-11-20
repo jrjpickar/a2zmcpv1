@@ -10,7 +10,7 @@ globalThis.fetch = async (url, init = {}) => {
   const system = body.messages[0].content;
   const user = body.messages.at(-1).content;
   count++;
-  if (/JARVIS dispatcher/.test(system)) return reply({ agent: 'systems' }, 120);
+  if (/Jose dispatcher/.test(system)) return reply({ agent: 'systems' }, 120);
   if (/maintain the operating playbook/.test(system)) return reply({ playbook: ['Lead with the number that changed most', 'Keep answers under 80 words'] }, 300);
   if (/Development agent/.test(system)) return reply({ summary: 'Plan: a view of won value by pipeline, bound to the pipelines module, refreshed nightly.', plan: {
     task: 'Won value by pipeline', description: 'Bind pipelines to a won value view.',

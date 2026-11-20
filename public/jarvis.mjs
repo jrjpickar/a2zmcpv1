@@ -1,9 +1,9 @@
-import { mountTopics, topicFor } from './jarvis-topics.mjs';
-// A2Z JARVIS panel: per-agent saved chats, learning, company memory, custom bots and the execution sandbox.
+import { mountTopics } from './jarvis-topics.mjs';
+// A2Z Jose panel: per-agent saved chats, learning, company memory, custom bots and the execution sandbox.
 // Text nodes only. No inline styles (the site CSP is style-src 'self').
 const builtins = { main: 'Main (delegates)', email: 'Email', systems: 'Systems and KPIs', build: 'Development + QC', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI' };
 const greetings = {
-  main: 'JARVIS online. Ask anything. I will hand it to Email, Systems, Development or one of your bots.',
+  main: 'Jose online. Ask anything. I will hand it to Email, Systems, Development or one of your bots.',
   email: 'Email agent online. Ask about unread mail, bid invitations, invoices and deadlines.',
   systems: 'Systems and KPIs online. Ask about leads, wins, pipelines, crews, runway or system health.',
   build: 'Development online. Describe a dashboard change. I draft a sandbox plan and QC checks it before you run it.',
@@ -79,7 +79,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw Object.assign(new Error(result.error || 'JARVIS request failed.'), { status: response.status, result });
+    if (!response.ok) throw Object.assign(new Error(result.error || 'Jose request failed.'), { status: response.status, result });
     return result;
   }
   const memoryCall = (body, target = role) => call('/api/jarvis-memory', { method: 'POST', body: { role: target, ...body } });
@@ -97,7 +97,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
 
   const log = node('div', { className: 'jarvis-log', ariaLive: 'polite' });
   const chips = node('div', { className: 'jarvis-chips' });
-  const prompt = node('textarea', { id: 'jarvis-prompt', required: true, maxLength: 12000, rows: 2, ariaLabel: 'Message JARVIS' });
+  const prompt = node('textarea', { id: 'jarvis-prompt', required: true, maxLength: 12000, rows: 2, ariaLabel: 'Message Jose' });
   const send = node('button', { type: 'submit', className: 'primary', id: 'jarvis-send' }, 'Send');
   const composer = node('form', { className: 'jarvis-composer' }, prompt, send);
   const chat = node('div', { className: 'jarvis-chat' }, log, chips, composer);
@@ -105,18 +105,17 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   const instructions = instructionsForm({ headers });
   const instructionsBox = node('details', { className: 'surface jarvis-learning', id: 'jarvis-instructions', ontoggle: () => { if (instructionsBox.open) instructions.load(); } },
     node('summary', {}, 'Custom instructions'), instructions);
-  let topic = '';
   const activity = node('ol', { className: 'jarvis-activity', ariaLabel: 'Recent processing' });
   const activityState = node('span', { className: 'pill', role: 'status' }, 'Idle');
   const activityPanel = node('aside', { className: 'jarvis-activity-panel' },
     node('div', { className: 'jarvis-activity-header' }, node('h2', {}, 'Processing log'), activityState), activity);
   const topicPanel = node('section', { className: 'jarvis-topics', ariaLabel: 'Chat topics' });
-  const topicMap = mountTopics(topicPanel, value => {
-    topic = value;
-    renderThreads();
-  });
+  const topicMap = mountTopics(topicPanel, id => {
+    void openThread(id);
+    prompt.focus();
+  }, renderThreadRow, () => call('/api/jarvis-diagnostics'));
   const panel = node('div', { className: 'jarvis' },
-    node('div', { className: 'jarvis-head' }, node('h1', {}, 'JARVIS'), roleSelect, badge, exportButton),
+    node('div', { className: 'jarvis-head' }, node('h1', {}, 'Jose'), roleSelect, badge, exportButton),
     node('div', { className: 'jarvis-topics-layout' }, topicPanel, activityPanel), node('div', { className: 'jarvis-layout' }, sidebar, chat), status, instructionsBox, learning);
 
   function renderRoles() {
@@ -127,7 +126,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   roleSelect.onchange = () => {
     if (roleSelect.value === '__new') { roleSelect.value = role; learning.open = true; renderLearning(true); return; }
     role = roleSelect.value;
-    threadId = null; messages = []; query = ''; topic = ''; search.value = '';
+    threadId = null; messages = []; query = ''; search.value = ''; topicMap.close(false);
     renderLog();
     refresh(true);
   };
@@ -148,10 +147,10 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   };
   exportButton.onclick = () => {
     if (!messages.length) { status.textContent = 'Nothing to export yet.'; return; }
-    const title = threads.find(t => t.id === threadId)?.title || 'JARVIS chat';
+    const title = threads.find(t => t.id === threadId)?.title || 'Jose chat';
     const lines = ['# ' + title, '', 'Agent: ' + nameOf(role) + '  ', 'Exported: ' + new Date().toLocaleString(), ''];
     for (const message of messages) {
-      lines.push('## ' + (message.role === 'user' ? 'You' : 'JARVIS' + (message.meta?.trace ? ' (' + message.meta.trace.map(id => traceNames[id] || nameOf(id)).join(' > ') + ')' : '')), '');
+      lines.push('## ' + (message.role === 'user' ? 'You' : 'Jose' + (message.meta?.trace ? ' (' + message.meta.trace.map(id => traceNames[id] || nameOf(id)).join(' > ') + ')' : '')), '');
       if (message.meta?.buildSummary) lines.push(message.meta.buildSummary, '');
       lines.push(message.content || '', '');
       if (message.meta?.plan) lines.push('```json', JSON.stringify(message.meta.plan, null, 2), '```', '');
@@ -167,6 +166,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
 
   function setBusy(value) {
     busy = value;
+    topicMap.setBusy(value);
     activityState.textContent = value ? 'Analyzing' : 'Idle';
     for (const control of [roleSelect, prompt, send, newChat]) control.disabled = value;
   }
@@ -179,27 +179,29 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
     badge.title = 'Rate replies and add corrections. The agent rewrites its playbook every 5 ratings.';
   }
 
-  function renderThreads(results = null) {
-    topicMap.update(threads, topic);
-    const list = (results || threads).filter(entry => !topic ||
-      (entry.topic || threads.find(thread => thread.id === entry.id)?.topic || topicFor(entry.title)) === topic);
-    threadList.replaceChildren(...list.map(entry => {
-      const open = node('button', { type: 'button', className: 'jarvis-thread' + (entry.id === threadId ? ' active' : ''), onclick: () => openThread(entry.id) },
-        node('span', {}, (entry.pinned ? '📌 ' : '') + entry.title), results ? node('small', {}, entry.snippet || 'Title match') : node('small', {}, new Date(entry.updatedAt).toLocaleDateString()));
-      const act = (label, title, handler) => node('button', { type: 'button', className: 'jarvis-icon', title, ariaLabel: title, onclick: handler }, label);
-      return node('li', {}, open,
-        act(entry.pinned ? '◉' : '○', entry.pinned ? 'Unpin chat' : 'Pin chat', () => threadAction({ action: 'pin', threadId: entry.id, pinned: !entry.pinned })),
-        act('✎', 'Rename chat', () => {
-          const title = window.prompt('Chat title', entry.title);
-          if (title?.trim()) threadAction({ action: 'rename', threadId: entry.id, text: title.trim().slice(0, 60) });
-        }),
-        act('×', 'Delete chat', () => {
-          if (!confirm('Delete this chat? Learned lessons stay.')) return;
-          threadAction({ action: 'delete', threadId: entry.id }).then(() => { if (entry.id === threadId) { threadId = null; messages = []; renderLog(); } });
-        }));
-    }));
-    if (!list.length) threadList.append(node('li', { className: 'jarvis-empty muted' }, results ? 'No matching chats.' : 'No saved chats yet.'));
+  function renderThreadRow(entry, open, searchResult = false) {
+    const button = node('button', { type: 'button', className: 'jarvis-thread' + (entry.id === threadId ? ' active' : ''), onclick: open },
+      node('span', {}, (entry.pinned ? '📌 ' : '') + entry.title), searchResult ? node('small', {}, entry.snippet || 'Title match') : node('small', {}, new Date(entry.updatedAt).toLocaleString()));
+    const act = (label, title, handler) => node('button', { type: 'button', className: 'jarvis-icon', title, ariaLabel: title, onclick: handler }, label);
+    return node('li', {}, button,
+      act(entry.pinned ? '◉' : '○', entry.pinned ? 'Unpin chat' : 'Pin chat', () => threadAction({ action: 'pin', threadId: entry.id, pinned: !entry.pinned })),
+      act('✎', 'Rename chat', () => {
+        const title = window.prompt('Chat title', entry.title);
+        if (title?.trim()) threadAction({ action: 'rename', threadId: entry.id, text: title.trim().slice(0, 60) });
+      }),
+      act('×', 'Delete chat', () => {
+        if (!confirm('Delete this chat? Learned lessons stay.')) return;
+        threadAction({ action: 'delete', threadId: entry.id }).then(() => { if (entry.id === threadId) { threadId = null; messages = []; renderLog(); } });
+      }));
   }
+
+  function renderThreads(results = null) {
+    topicMap.update(threads);
+    const list = results || [];
+    threadList.replaceChildren(...list.map(entry => renderThreadRow(entry, () => openThread(entry.id), true)));
+    if (results && !list.length) threadList.append(node('li', { className: 'jarvis-empty muted' }, 'No matching chats.'));
+  }
+
   async function threadAction(body) {
     try { await memoryCall(body); await refresh(); } catch (error) { status.textContent = error.message; }
   }
@@ -366,7 +368,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
     if (thinking) log.append(node('div', { className: 'jarvis-msg assistant thinking' }, node('span'), node('span'), node('span')));
     chips.replaceChildren(...(messages.length ? [] : (suggestions[role] || []).map(text =>
       node('button', { type: 'button', className: 'jarvis-chip', onclick: () => { prompt.value = text; prompt.focus(); } }, text))));
-    prompt.placeholder = messages.length ? 'Follow up. "remember:" teaches this agent, "remember for all agents:" teaches every agent.' : 'Message JARVIS, or paste /execute {plan JSON}';
+    prompt.placeholder = messages.length ? 'Follow up. "remember:" teaches this agent, "remember for all agents:" teaches every agent.' : 'Message Jose, or paste /execute {plan JSON}';
     log.scrollTop = log.scrollHeight;
     const events = messages.filter(message => message.meta?.trace || message.error).slice(-200);
     activity.replaceChildren(...events.map(message => node('li', {},
@@ -410,6 +412,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
       messages = thread.messages;
       const entry = threads.find(item => item.id === thread.id);
       if (entry && thread.topic && entry.topic !== thread.topic) {
+        topicMap.classified(thread.id);
         entry.topic = thread.topic;
         renderThreads();
       }
@@ -450,7 +453,10 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
       const meta = {};
       for (const name of ['trace', 'approved', 'buildSummary', 'agent', 'plan', 'planHash', 'warnings', 'validation', 'usage', 'execute']) if (result[name] !== undefined) meta[name] = result[name];
       messages.push({ id: result.messageId, role: 'assistant', content: result.answer, meta });
-      if (result.threadId) threadId = result.threadId;
+      if (result.threadId) {
+        if (command.newThread) topicMap.classified(result.threadId);
+        threadId = result.threadId;
+      }
       if (result.memoryError) status.textContent = result.memoryError;
       refresh();
     } catch (error) {
