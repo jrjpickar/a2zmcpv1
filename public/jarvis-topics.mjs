@@ -293,6 +293,9 @@ export function mountTopics(container, openChat, renderChat, readDiagnostics) {
         event.httpStatus ? 'HTTP ' + event.httpStatus : '', event.code, event.message, event.destination,
         Number.isFinite(event.retry) ? 'retry ' + event.retry : '', event.elapsedMs + ' ms', event.requestId,
       ].filter(Boolean).join(' · ');
+      const usageText = ([model, u]) => model + ' · ' + u.calls + ' calls · ' + u.errors + ' errors · ' + (u.inTokens + u.outTokens).toLocaleString('en-US') + ' tokens · avg ' + u.avgMs + ' ms';
+      if (data.usage) rows.push('Model usage today', ...(Object.entries(data.usage.today).map(usageText).concat(Object.keys(data.usage.today).length ? [] : ['No calls yet today'])),
+        'Model usage, last 7 days', ...Object.entries(data.usage.last7Days).map(usageText));
       rows.push('Recent events', ...data.events.filter(entry => entry.type !== 'error').map(eventText));
       rows.push('Last 50 errors', ...data.errors.map(eventText));
       chats.replaceChildren(...rows.map(text => element('li', '', text.replace(/[\u2013\u2014]/g, '-'))));

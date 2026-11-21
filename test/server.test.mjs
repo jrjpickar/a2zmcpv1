@@ -150,3 +150,17 @@ test('VM voice starts with a rotating HTTPS tunnel origin and accepts audio-size
   assert.equal(result.status, 400);
   assert.match(result.body.error, /PCM audio/);
 });
+
+test('server serves every module the dashboard imports', async t => {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const key = 'dashboard-key-0123456789abcdef';
+  const server = await start({ DASHBOARD_KEY: key });
+  t.after(() => server.stop());
+  const names = new Set();
+  for (const file of (await readdir('public')).filter(name => /\.m?js$/.test(name) && name !== 'city3d.js')) {
+    for (const match of (await readFile('public/' + file, 'utf8')).matchAll(/from '\.\/([\w.-]+)'/g)) names.add(match[1]);
+  }
+  assert.ok(names.has('estimating-booking.mjs'));
+  for (const name of names) assert.equal((await fetch(server.base + '/' + name, { headers: { 'x-a2z-key': key } })).status, 200, name);
+  assert.equal((await fetch(server.base + '/../package.json', { headers: { 'x-a2z-key': key } })).status, 404);
+});

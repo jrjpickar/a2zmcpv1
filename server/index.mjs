@@ -63,7 +63,9 @@ const securityHeaders = {
   'Content-Security-Policy': "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; connect-src 'self'; media-src 'self' blob:; style-src 'self'; frame-ancestors 'self' https://app.gohighlevel.com https://app.leadconnectorhq.com",
 };
 const types = { html: 'text/html; charset=utf-8', js: 'application/javascript', mjs: 'application/javascript', css: 'text/css' };
-const staticFiles = new Set(['index.html', 'app.js', 'map.js', 'city3d.js', 'styles.css', 'jarvis.mjs', 'jarvis-topics.mjs', 'topic-rules.mjs', 'animation-frame.mjs', 'instructions.mjs', 'voice.js', 'voice-vad.js', 'voice.css', 'voice-launch.js', 'voice.html']);
+// Every top-level file in public/ with a known type, read once at startup, so new modules are never left out.
+const staticFiles = new Set((await readdir(new URL('../public/', import.meta.url), { withFileTypes: true }))
+  .filter(entry => entry.isFile() && /^[\w.-]+$/.test(entry.name) && Object.hasOwn(types, entry.name.split('.').pop())).map(entry => entry.name));
 const started = Date.now();
 const digest = value => createHash('sha256').update(value).digest();
 const tokenMatches = value => timingSafeEqual(digest(value), digest(token));

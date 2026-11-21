@@ -1169,6 +1169,7 @@ function renderSettings() {
   $('webhook').value = settings.webhookUrl;
   $('cooldown').value = settings.cooldownMinutes;
   $('alerts-on').checked = settings.enabled;
+  $('alerts-fixed').checked = settings.notifyRecovery !== false;
   const billing = settings.billing || {};
   $('netlify-credits').value = billing.netlifyCreditsRemaining ?? '';
   $('netlify-asof').value = billing.netlifyCreditsAsOf || '';
@@ -1181,7 +1182,7 @@ function renderSettings() {
     const card = node('section', undefined, 'surface rule-group');
     card.append(node('h2', group));
     const head = node('div', undefined, 'rule head');
-    for (const label of ['On', 'Metric', 'Now', 'Condition', 'Threshold', 'Period']) head.append(node('span', label));
+    for (const label of ['On', 'Metric', 'Now', 'Condition', 'Threshold', 'Period', 'Checks']) head.append(node('span', label));
     card.append(head);
     for (const m of metrics.filter(x => x.group === group)) {
       const rule = settings.rules[m.key] || { enabled: false, op: conditions[m.kind][0][0], threshold: null, preset: 'mtd' };
@@ -1195,10 +1196,13 @@ function renderSettings() {
       const threshold = node('input'); threshold.type = 'number'; threshold.step = 'any'; threshold.name = 'threshold';
       threshold.value = rule.threshold ?? ''; threshold.setAttribute('aria-label', 'Threshold'); threshold.hidden = m.kind === 'status';
       const preset = options(node('select'), periods, rule.preset); preset.name = 'preset'; preset.setAttribute('aria-label', 'Period'); preset.hidden = !m.period;
-      for (const el of [on, op, threshold, preset]) el.disabled = !canEdit;
+      const wait = node('input'); wait.type = 'number'; wait.min = '1'; wait.max = '12'; wait.step = '1'; wait.name = 'wait';
+      wait.value = rule.wait || 1; wait.setAttribute('aria-label', 'Checks in a row before alert'); wait.title = 'Checks in a row (15 min each) before the alert sends';
+      for (const el of [on, op, threshold, preset, wait]) el.disabled = !canEdit;
       const t = node('span'); t.append(threshold);
       const p = node('span'); p.append(preset);
-      row.append(on, name, value, op, t, p);
+      const w = node('span'); w.append(wait);
+      row.append(on, name, value, op, t, p, w);
       card.append(row);
     }
     rules.append(card);
@@ -1211,11 +1215,11 @@ function readSettings() {
     const enabled = get('enabled').checked, op = get('op').value, threshold = get('threshold').value;
     if (!enabled && threshold === '') continue;
     if (enabled && op !== 'not_ok' && threshold === '') throw new Error('Add a threshold for ' + row.querySelector('.metric').textContent);
-    rules[row.dataset.key] = { enabled, op, threshold: threshold === '' ? null : Number(threshold), preset: get('preset').value };
+    rules[row.dataset.key] = { enabled, op, threshold: threshold === '' ? null : Number(threshold), preset: get('preset').value, wait: Number(get('wait').value) || 1 };
   }
   const billing = { netlifyCreditsRemaining: $('netlify-credits').value, netlifyCreditsAsOf: $('netlify-asof').value || (($('netlify-credits').value !== '') ? new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }) : ''),
     makeCycleCredits: $('make-cycle').value };
-  return { webhookUrl: $('webhook').value.trim(), cooldownMinutes: Number($('cooldown').value), enabled: $('alerts-on').checked, rules, billing };
+  return { webhookUrl: $('webhook').value.trim(), cooldownMinutes: Number($('cooldown').value), enabled: $('alerts-on').checked, notifyRecovery: $('alerts-fixed').checked, rules, billing };
 }
 async function alertRequest(method, body, done) {
   $('alert-status').textContent = 'Working…';

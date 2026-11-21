@@ -1,4 +1,5 @@
 import { createGroqFailover } from './lib/jarvis-failover.mjs';
+import { modelLogger } from './lib/model-log.mjs';
 // POST /api/jarvis { role, prompt, threadId?, newThread?, previousTask?, preset?, plan? }
 // Admin dashboard access, same origin and JSON required. Without threadId/newThread the call is stateless and touches no chat storage.
 import { cloudflareModel, CLOUDFLARE_MODEL, compileAgents, failure, geminiModel, GEMINI_MODEL, groqModel, JARVIS_MODEL, agentNames, builtinRoles, rolePattern } from './lib/jarvis-agents.mjs';
@@ -35,8 +36,10 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
   let running = false;
   const primary = env.JARVIS_GROQ_MODEL?.trim() || JARVIS_MODEL;
   const backup = env.JARVIS_GROQ_BACKUP_MODEL?.trim();
-  const transport = backup && backup !== primary ? createGroqFailover({ primary, backup, openStore, fetchImpl }) : fetchImpl;
-  return async function handler(request) {
+  const log = modelLogger({ openStore });
+  const modelFetch = log.wrap(fetchImpl);
+  const transport = backup && backup !== primary ? createGroqFailover({ primary, backup, openStore, fetchImpl: modelFetch }) : modelFetch;
+  return async function handler(request, context) {
     const { access, response } = guard(request, { env });
     if (response) return response;
     let role, prompt, previousTask, threadId, newThread, preset, plan;
@@ -150,8 +153,8 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       const deps = {
         bots,
         mailAction: access.mailbox ? mailActions({ env, fetchImpl }) : null,
-        cloudflare: cfAccount && cfToken ? cloudflareModel(cfAccount, cfToken, fetchImpl, { model: env.CLOUDFLARE_AI_MODEL?.trim() || CLOUDFLARE_MODEL, usage }) : null,
-        gemini: geminiKey ? geminiModel(geminiKey, fetchImpl, { model: env.GEMINI_MODEL?.trim() || GEMINI_MODEL, usage }) : null,
+        cloudflare: cfAccount && cfToken ? cloudflareModel(cfAccount, cfToken, modelFetch, { model: env.CLOUDFLARE_AI_MODEL?.trim() || CLOUDFLARE_MODEL, usage }) : null,
+        gemini: geminiKey ? geminiModel(geminiKey, modelFetch, { model: env.GEMINI_MODEL?.trim() || GEMINI_MODEL, usage }) : null,
         systems: () => (systems ??= readSystems(preset).catch(() => { throw failure('A2Z metrics are unavailable right now.', 502); })),
         mail: async () => {
           if (!access.mailbox) throw failure('Mailbox access is not enabled for this sign-in.', 403);
@@ -172,6 +175,9 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       return json({ error: error.agentStatus ? error.message : 'JARVIS could not complete the task. Check your provider settings and retry.' }, error.agentStatus || 502);
     } finally {
       running = false;
+      // Model log rows finish in the background. Netlify keeps the function alive for them with waitUntil.
+      const flushed = log.flush(5000);
+      if (typeof context?.waitUntil === 'function') context.waitUntil(flushed);
     }
   };
 }

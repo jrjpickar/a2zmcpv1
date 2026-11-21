@@ -2,6 +2,7 @@
 // A matching rule posts one JSON payload to the configured webhook (Make by default), then waits out its cooldown.
 import { appStore, SETTINGS_KEY } from './store.mjs';
 import { report as buildReport } from './report.mjs';
+import { addSamples, HISTORY_KEY } from './source-history.mjs';
 
 export const DEFAULT_WEBHOOK = 'https://hook.us2.make.com/bjl5ooam64m8csp4glmr3bxbykc9cpi5';
 export const PRESETS = ['today', 'wtd', 'mtd', '30d', 'ytd'];
@@ -43,7 +44,7 @@ export function catalog(report) {
 const sourceNames = { estimating: 'Estimating feed', dispatch: 'Dispatch feed', ledger: 'Ledger feed', cash: 'Cash balance feed', ghl: 'GoHighLevel', twilio: 'Twilio API', make: 'Make API' };
 
 export function defaults() {
-  return { webhookUrl: DEFAULT_WEBHOOK, enabled: true, cooldownMinutes: 240, rules: {}, billing: {} };
+  return { webhookUrl: DEFAULT_WEBHOOK, enabled: true, cooldownMinutes: 240, notifyRecovery: true, rules: {}, billing: {} };
 }
 
 // Accept only known fields. Rules: { [metricKey]: { enabled, op: above|below|not_ok, threshold, preset } }
@@ -56,6 +57,7 @@ export function sanitize(input) {
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password) throw new RangeError('Webhook URL must use https');
   out.webhookUrl = parsed.href;
   out.enabled = input.enabled !== false;
+  out.notifyRecovery = input.notifyRecovery !== false;
   const cooldown = Number(input.cooldownMinutes ?? out.cooldownMinutes);
   if (!Number.isFinite(cooldown) || cooldown < 15 || cooldown > 10080) throw new RangeError('Cooldown must be 15 to 10080 minutes');
   out.cooldownMinutes = Math.round(cooldown);
@@ -74,7 +76,10 @@ export function sanitize(input) {
     const threshold = op === 'not_ok' ? null : Number(rule.threshold);
     if (op !== 'not_ok' && (rule.threshold === '' || rule.threshold == null || !Number.isFinite(threshold))) throw new RangeError('Threshold required for ' + key);
     const preset = PRESETS.includes(rule.preset) ? rule.preset : 'mtd';
-    out.rules[key] = { enabled: rule.enabled === true, op, threshold, preset };
+    // Checks in a row before the alert sends (Grafana "for"). 1 = first breach, the old behavior.
+    const wait = rule.wait == null || rule.wait === '' ? 1 : Number(rule.wait);
+    if (!Number.isInteger(wait) || wait < 1 || wait > 12) throw new RangeError('Checks before alert must be 1 to 12 for ' + key);
+    out.rules[key] = { enabled: rule.enabled === true, op, threshold, preset, wait };
   }
   return out;
 }
@@ -115,12 +120,12 @@ export async function evaluate(settings, { env = process.env, now = new Date(), 
       message: m.label + ' ' + describe(m, rule) + ': now ' + (m.kind === 'status' ? m.value : m.format(m.value)) + (m.period ? ' (' + range.from + ' to ' + range.to + ')' : ''),
     });
   }
-  return { alerts, mode: reports[presets[0]].mode, metrics: catalog(reports.mtd || reports[presets[0]]) };
+  return { alerts, mode: reports[presets[0]].mode, metrics: catalog(reports.mtd || reports[presets[0]]), sources: reports[presets[0]].system?.sources || {} };
 }
 
-export function payload(alerts, { mode, test = false, now = new Date(), env = process.env } = {}) {
+export function payload(alerts, { mode, test = false, resolved = false, now = new Date(), env = process.env } = {}) {
   return {
-    source: 'a2z-operations', event: test ? 'alert.test' : 'alert.triggered', test, mode,
+    source: 'a2z-operations', event: test ? 'alert.test' : resolved ? 'alert.resolved' : 'alert.triggered', test, mode,
     sentAt: now.toISOString(), dashboardUrl: env.URL || null, count: alerts.length,
     summary: alerts.map(a => a.message).join('\n'), alerts,
   };
@@ -147,18 +152,37 @@ async function check({ env = process.env, now = new Date(), store = alertStore()
     if (!settings.enabled) return { skipped: 'Alerts are turned off' };
     if (!Object.values(settings.rules).some(r => r.enabled)) return { skipped: 'No alert rules enabled' };
     if (env.DATA_MODE === 'sample' && env.ALERT_ALLOW_SAMPLE !== '1' && !force) return { skipped: 'Sample mode' };
-    const { alerts, mode } = await evaluate(settings, { env, now, reportImpl });
+    const { alerts, mode, sources } = await evaluate(settings, { env, now, reportImpl });
+    // Uptime samples for Diagnostics. Best effort: a failed write never stops alerts.
+    await store.get(HISTORY_KEY, { type: 'json' }).catch(() => null)
+      .then(history => store.setJSON(HISTORY_KEY, addSamples(history, sources, now.toISOString()))).catch(() => {});
     const state = (await store.get(STATE_KEY, { type: 'json' }).catch(() => null)) || { sent: {} };
+    state.sent ||= {}; state.streak ||= {}; state.labels ||= {};
     const wait = settings.cooldownMinutes * 60000, at = now.getTime();
-    const fresh = alerts.filter(a => !state.sent[a.id] || at - state.sent[a.id] > wait);
-    // Rules that recovered can alert again on their next breach.
-    for (const id of Object.keys(state.sent)) if (!alerts.some(a => a.id === id)) delete state.sent[id];
+    // Count breaches in a row. A rule sends once it has breached for its wait (default 1 check).
+    const firing = new Set(alerts.map(a => a.id));
+    for (const id of Object.keys(state.streak)) if (!firing.has(id)) delete state.streak[id];
+    for (const a of alerts) state.streak[a.id] = (state.streak[a.id] || 0) + 1;
+    const ready = alerts.filter(a => state.streak[a.id] >= (settings.rules[a.id]?.wait || 1));
+    const fresh = ready.filter(a => !state.sent[a.id] || at - state.sent[a.id] > wait);
+    // Rules that were sent and no longer breach get one "fixed" note, then can alert again on their next breach.
+    const resolved = Object.keys(state.sent).filter(id => !firing.has(id)).map(id => ({
+      id, metric: state.labels[id] || id, severity: 'info', message: 'Fixed: ' + (state.labels[id] || id) + ' is back to normal',
+    }));
     if (fresh.length) {
       await post(settings.webhookUrl, payload(fresh, { mode, now, env }), fetchImpl);
-      for (const a of fresh) state.sent[a.id] = at;
+      for (const a of fresh) { state.sent[a.id] = at; state.labels[a.id] = a.metric; }
+    }
+    let fixed = 0;
+    if (resolved.length) {
+      try {
+        if (settings.notifyRecovery !== false) await post(settings.webhookUrl, payload(resolved, { mode, resolved: true, now, env }), fetchImpl);
+        for (const r of resolved) { delete state.sent[r.id]; delete state.labels[r.id]; }
+        fixed = settings.notifyRecovery !== false ? resolved.length : 0;
+      } catch { /* Kept in state, so the fixed note retries on the next check. */ }
     }
     await store.setJSON(STATE_KEY, state);
-    return { triggered: alerts.length, sent: fresh.length };
+    return { triggered: alerts.length, sent: fresh.length, waiting: alerts.length - ready.length, fixed };
   } catch (error) {
     console.error('Alert check failed', error);
     return { error: error instanceof RangeError ? error.message : 'Alert check failed' };

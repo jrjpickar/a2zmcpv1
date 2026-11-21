@@ -67,26 +67,26 @@ export async function wonSales(env, signal) {
   throw new Error('Opportunity pagination limit');
 }
 
-export async function twilioBalance(env) {
+export async function twilioBalance(env, signal) {
   const sid = required(env, 'TWILIO_ACCOUNT_SID');
   if (!/^AC[a-f0-9]{32}$/i.test(sid)) throw new Error('Invalid Twilio account ID');
   const secret = required(env, 'TWILIO_AUTH_TOKEN');
   const data = await readJson('https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Balance.json', {
-    headers: { Authorization: 'Basic ' + Buffer.from(sid + ':' + secret).toString('base64') },
+    headers: { Authorization: 'Basic ' + Buffer.from(sid + ':' + secret).toString('base64') }, signal,
   });
   const balance = number(data.balance);
   if (balance === null || !/^[A-Z]{3}$/.test(data.currency)) throw new Error('Invalid Twilio balance');
   return { balance, currency: data.currency, asOf: new Date().toISOString() };
 }
 
-export async function netlifyDeploy(env, key) {
+export async function netlifyDeploy(env, key, signal) {
   const id = required(env, key + '_NETLIFY_SITE_ID');
   const token = required(env, 'NETLIFY_ACCESS_TOKEN');
   const url = 'https://api.netlify.com/api/v1/sites/' + encodeURIComponent(id);
   const headers = { Authorization: 'Bearer ' + token };
   const [site, deploys] = await Promise.all([
-    readJson(url, { headers }),
-    readJson(url + '/deploys?production=true&per_page=10', { headers }),
+    readJson(url, { headers, signal }),
+    readJson(url + '/deploys?production=true&per_page=10', { headers, signal }),
   ]);
   if (!site.id || !Array.isArray(deploys)) throw new Error('Invalid Netlify deploy data');
   const published = site.published_deploy || deploys.find(d => d.id === site.deploy_id);
@@ -105,7 +105,7 @@ export function makeZone(raw) {
   return host;
 }
 
-export async function makeUsage(env) {
+export async function makeUsage(env, signal) {
   const zone = makeZone(required(env, 'MAKE_ZONE'));
   const org = required(env, 'MAKE_ORG_ID');
   const token = required(env, 'MAKE_API_TOKEN').replace(/^Token\s+/i, '');
@@ -113,7 +113,7 @@ export async function makeUsage(env) {
   let data;
   try {
     data = await readJson('https://' + zone + '/api/v2/organizations/' + org + '/usage?organizationTimezone=true', {
-      headers: { Authorization: 'Token ' + token, Accept: 'application/json' },
+      headers: { Authorization: 'Token ' + token, Accept: 'application/json' }, signal,
     });
   } catch (error) {
     const status = /HTTP (\d+)/.exec(error.message)?.[1];
@@ -131,11 +131,11 @@ export async function makeUsage(env) {
 }
 
 // Organization details carry the plan allowance and reset dates. Field names vary by plan, so several are tried.
-export async function makeOrganization(env) {
+export async function makeOrganization(env, signal) {
   const zone = makeZone(required(env, 'MAKE_ZONE'));
   const org = required(env, 'MAKE_ORG_ID');
   const token = required(env, 'MAKE_API_TOKEN').replace(/^Token\s+/i, '');
-  const data = await readJson('https://' + zone + '/api/v2/organizations/' + org, { headers: { Authorization: 'Token ' + token, Accept: 'application/json' } });
+  const data = await readJson('https://' + zone + '/api/v2/organizations/' + org, { headers: { Authorization: 'Token ' + token, Accept: 'application/json' }, signal });
   const o = data?.organization || {}, lic = o.license || {};
   const first = (...v) => v.map(number).find(x => x !== null) ?? null;
   const centi = first(o.consumedCenticredits, lic.consumedCenticredits);
@@ -147,16 +147,16 @@ export async function makeOrganization(env) {
   };
 }
 
-export async function makeAccount(env) {
-  const [usage, org] = await Promise.all([makeUsage(env), makeOrganization(env).catch(() => null)]);
+export async function makeAccount(env, signal) {
+  const [usage, org] = await Promise.all([makeUsage(env, signal), makeOrganization(env, signal).catch(() => null)]);
   return { usage, org };
 }
 
-export async function cashBalance(env) {
+export async function cashBalance(env, signal) {
   const url = new URL(required(env, 'CASH_BALANCE_URL'));
   if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Invalid cash balance URL');
   const token = required(env, 'CASH_BALANCE_TOKEN');
-  const data = await readJson(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, cache: 'no-store' });
+  const data = await readJson(url, { headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, cache: 'no-store', signal });
   const balance = number(data?.balance);
   const timestamp = typeof data?.asOf === 'string' && /T.*(?:Z|[+-]\d\d:\d\d)$/.test(data.asOf) ? Date.parse(data.asOf) : NaN;
   if (balance === null || data.currency !== 'USD' || !Number.isFinite(timestamp) || timestamp > Date.now()) {

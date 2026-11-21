@@ -107,7 +107,7 @@ body { display: flex; flex-direction: column; height: 100dvh; min-height: 0; }
 #alert-status { grid-column: 1 / -1; min-height: 1.2em; }
 .rule-group { padding: 14px 18px 8px; }
 .rule-group h2 { margin-bottom: 6px; color: var(--accent); font-size: .74rem; letter-spacing: .12em; text-transform: uppercase; }
-.rule { --c: var(--accent); display: grid; grid-template-columns: 34px minmax(0, 1.6fr) minmax(70px, .7fr) 130px 120px 140px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #262d27; font-size: .85rem; }
+.rule { --c: var(--accent); display: grid; grid-template-columns: 34px minmax(0, 1.6fr) minmax(70px, .7fr) 130px 120px 140px 70px; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid #262d27; font-size: .85rem; }
 .rule.head { color: var(--dim); font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; }
 .rule .metric { display: flex; align-items: center; gap: 8px; }
 .rule .metric::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 3px; background: var(--c); }

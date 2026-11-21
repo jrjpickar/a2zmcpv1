@@ -31,7 +31,7 @@ export default async request => {
   if (!token) return json({ status: 'setup' });
   try {
     const { stats, asOf, arrivalSequence } = await readJson(commandCenterUrl, {
-      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' },
+      headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }, signal: AbortSignal.timeout(9000),
     });
     if (!counters.every(field => Number.isSafeInteger(stats?.[field]) && stats[field] >= 0) ||
         typeof asOf !== 'string' || !Number.isFinite(Date.parse(asOf))) {

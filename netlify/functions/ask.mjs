@@ -4,6 +4,8 @@ import { json } from './lib/http.mjs';
 import { report } from './lib/report.mjs';
 import { ask } from './lib/groq.mjs';
 import { evaluate, loadSettings } from './lib/alerts.mjs';
+import { modelLogger } from './lib/model-log.mjs';
+import { openJarvisStore } from './lib/jarvis-store.mjs';
 
 // POST /api/ask { question?, preset? }. No question returns the HQ overview. Needs the dashboard key: every call can spend Groq tokens.
 export default async (request, context = {}) => {
@@ -18,7 +20,10 @@ export default async (request, context = {}) => {
     const body = JSON.parse(text || '{}');
     const result = await report({ preset: body.preset || 'mtd' });
     const alerts = await loadSettings(store).then(s => evaluate(s)).then(r => r.alerts).catch(() => []);
-    const ai = await ask({ question: body.question, result, alerts, fetchImpl });
+    const log = modelLogger({ openStore: context.openStore || (() => openJarvisStore()) });
+    const ai = await ask({ question: body.question, result, alerts, fetchImpl: log.wrap(fetchImpl) });
+    const flushed = log.flush(5000);
+    if (typeof context.waitUntil === 'function') context.waitUntil(flushed);
     if (!ai.configured) return json({ configured: false, answer: null, signals: result.signals, note: 'GROQ_API_KEY is not set. Showing rule-based signals.' });
     return json({ ...ai, signals: result.signals });
   } catch (error) {

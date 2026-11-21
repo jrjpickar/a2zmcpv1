@@ -2,6 +2,7 @@ import { number } from './http.mjs';
 import { cashBalance, containerPipelineId, exportFeed, makeAccount, wonSales, netlifyDeploy, siteKeys, source, twilioBalance } from './sources.mjs';
 import { containerSales as summarizeContainers, day, funnel, pipelineSales, signals, makeCreditBalance, netlifyCreditBalance, rangeFor, runway, workforce, workforceTrace } from './metrics.mjs';
 import { appStore, SETTINGS_KEY } from './store.mjs';
+import { HISTORY_KEY, sourceState } from './source-history.mjs';
 
 const cache = new WeakMap();
 const ttl = 90_000;
@@ -60,7 +61,9 @@ async function readSources(env, today) {
     return { ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, ok(v)])), billing: { status: 'ok', data: {} }, builds: Object.fromEntries(Object.entries(builds).map(([k, v]) => [k, ok(v)])) };
   }
 
-  const signal = AbortSignal.timeout(16000);
+  // Whole-read budget, retries included. Netlify keeps it under the 10 s function limit. The VM (A2Z_STORE_DIR set) keeps 16 s.
+  const budget = Number(env.SOURCE_BUDGET_MS) || (env.A2Z_STORE_DIR ? 16000 : 9000);
+  const signal = AbortSignal.timeout(Math.min(Math.max(budget, 2000), 25000));
   const ledger = source(() => exportFeed(env, 'LEDGER', ['bills'], signal));
   const tasks = {
     estimating: source(() => exportFeed(env, 'ESTIMATING', ['opportunities', 'pipelines'], signal)),
@@ -73,17 +76,17 @@ async function readSources(env, today) {
       if (bank?.status === 'error' || bank?.status === 'ok') {
         return { status: 'error', detail: 'Ledger bank balance unavailable' };
       }
-      if (env.CASH_BALANCE_URL) return source(() => cashBalance(env));
+      if (env.CASH_BALANCE_URL) return source(() => cashBalance(env, signal));
       if (result.status === 'error') return { status: 'error', detail: 'Ledger export unavailable' };
       return { status: 'setup', detail: 'Configure a bank connection on the Ledger' };
     }),
     ledger,
     ghl: source(() => wonSales(env, signal)),
-    twilio: source(() => twilioBalance(env)),
-    make: source(() => makeAccount(env)),
+    twilio: source(() => twilioBalance(env, signal)),
+    make: source(() => makeAccount(env, signal)),
     // Billing inputs saved on the Alerts page. Read with the other sources, so once per cache window.
     billing: env.DATA_MODE === 'test' ? { status: 'ok', data: {} } : appStore().get(SETTINGS_KEY, { type: 'json' }).then(s => ({ status: 'ok', data: s?.billing || {} })).catch(() => ({ status: 'ok', data: {} })),
-    builds: Promise.all(Object.entries(siteKeys).map(async ([name, key]) => [name, await source(() => netlifyDeploy(env, key))])).then(Object.fromEntries),
+    builds: Promise.all(Object.entries(siteKeys).map(async ([name, key]) => [name, await source(() => netlifyDeploy(env, key, signal))])).then(Object.fromEntries),
   };
   return Object.fromEntries(await Promise.all(Object.entries(tasks).map(async ([name, task]) => [name, await task])));
 }
@@ -203,6 +206,12 @@ export async function diagnostics({ env = process.env, now = new Date(), fresh =
   const { builds, billing, ...feeds } = sources;
   const checks = Object.entries(feeds).map(([name, r]) => ({ id: 'source:' + name, group: 'Data sources', label: labels[name] || name,
     status: r.status, detail: r.detail || null, ms: r.ms ?? null, checkedAt: r.checkedAt || null, records: records(name, r.data, today) }));
+  // Uptime and state per source from the alert check samples (Diagnostics only, best effort).
+  const history = env.DATA_MODE === 'test' ? null : await appStore().get(HISTORY_KEY, { type: 'json' }).catch(() => null);
+  for (const check of checks) {
+    const state = sourceState(history?.[check.id.slice('source:'.length)], Number(env.SOURCE_DOWN_AFTER) || 1);
+    if (state) check.records = { ...check.records, state: state.state, uptime24h: state.uptime24h == null ? null : state.uptime24h + '%', checks24h: state.checks24h };
+  }
   for (const [name, r] of Object.entries(builds)) checks.push({ id: 'deploy:' + name, group: 'Deploys', label: name + ' production deploy',
     status: r.status === 'ok' ? (r.data.state === 'ready' ? 'ok' : 'error') : r.status, detail: r.detail || (r.data && ['state ' + r.data.state,
       r.data.latestState && r.data.latestState !== r.data.state && 'latest build ' + r.data.latestState].filter(Boolean).join(', ')) || null,
