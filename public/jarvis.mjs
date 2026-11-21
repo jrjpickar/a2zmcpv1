@@ -68,6 +68,7 @@ function table(rows) {
 }
 
 import { instructionsForm } from './instructions.mjs';
+import { estimatingBooking } from './estimating-booking.mjs';
 
 export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   let role = 'main', threadId = null, messages = [], threads = [], learned = null, shared = [], bots = [], busy = false, loadToken = 0, query = '';
@@ -116,7 +117,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   }, renderThreadRow, () => call('/api/jarvis-diagnostics'));
   const panel = node('div', { className: 'jarvis' },
     node('div', { className: 'jarvis-head' }, node('h1', {}, 'Jose'), roleSelect, badge, exportButton),
-    node('div', { className: 'jarvis-topics-layout' }, topicPanel, activityPanel), node('div', { className: 'jarvis-layout' }, sidebar, chat), status, instructionsBox, learning);
+    node('div', { className: 'jarvis-topics-layout' }, topicPanel, activityPanel), node('div', { className: 'jarvis-layout' }, sidebar, chat), status, estimatingBooking(call), instructionsBox, learning);
 
   function renderRoles() {
     roleSelect.replaceChildren(...Object.entries(builtins).map(([id, label]) => new Option(label, id)),

@@ -9,6 +9,7 @@ Set runtime variables in each site's Netlify settings. Generate distinct, random
 | Site | Variables | Purpose |
 | --- | --- | --- |
 | A2Z Operations | `DASHBOARD_KEY`, `MCP_KEY` | Dashboard access and separate MCP client access |
+| A2Z Operations | `ESTIMATING_ACTION_KEY` | Shared secret matching the Desk’s `JARVIS_ACTION_KEY` |
 | A2Z Operations | `ESTIMATING_URL`, `DISPATCH_URL`, `LEDGER_URL` | HTTPS production origins of the three applications |
 | A2Z Operations | `ESTIMATING_EXPORT_KEY`, `DISPATCH_EXPORT_KEY`, `LEDGER_EXPORT_KEY` | Match the respective site's `METRICS_EXPORT_KEY` |
 | Each source site | `METRICS_EXPORT_KEY` | Enables its protected export |
