@@ -1,0 +1,6 @@
+{
+  "models": [],
+  "monitors": [
+    { "id": "available-memory", "kind": "memory", "seconds": 30, "minFreeMiB": 100 }
+  ]
+}

@@ -1285,11 +1285,17 @@ function route() {
 
 // Jose loads on first visit so the city view stays as light as before.
 let jarvisPanel = null;
+let joseRuntimePanel = null;
 async function loadJarvis() {
   try {
     jarvisPanel ||= (await import('./jarvis.mjs')).createJarvisPanel({ headers: authHeaders, preset: () => $('range').value });
     if (!jarvisPanel.isConnected) $('jarvis').replaceChildren(jarvisPanel);
     jarvisPanel.load();
+    try {
+      joseRuntimePanel ||= (await import('./jose-runtime.mjs')).createRuntimePanel(authHeaders);
+      if (!joseRuntimePanel.isConnected) $('jarvis').prepend(joseRuntimePanel);
+      joseRuntimePanel.load();
+    } catch { /* Preserve the existing JOSE Desk if the runtime panel fails to load. */ }
   } catch {
     $('jarvis').replaceChildren(Object.assign(document.createElement('p'), { className: 'muted', textContent: 'Jose is available on the deployed site or with npm run sandbox.' }));
   }

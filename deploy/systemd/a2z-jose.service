@@ -1,0 +1,29 @@
+[Unit]
+Description=A2Z JOSE task runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+EnvironmentFile=/etc/a2z-jose/runtime.env
+Environment=JOSE_STATE_DIR=/var/lib/a2z-jose
+StateDirectory=a2z-jose
+StateDirectoryMode=0700
+ExecStart=/usr/bin/node --max-old-space-size=48 --dns-result-order=ipv6first /opt/a2z-jose/runtime.mjs
+Restart=on-failure
+RestartSec=5s
+MemoryHigh=105M
+MemoryMax=140M
+TasksMax=32
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
