@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One command redeploy on the VM: pull code, rebuild, restart, wait for health.  Usage: ./deploy.sh
-# Runs only when you call it. Nothing pulls images or code on a schedule.
+# Runs only when you call it. To follow Netlify deploys automatically, install the timer: sudo deploy/setup-auto-update.sh
 set -Eeuo pipefail
 # Never die silently: print the failing line and command.
 trap 'rc=$?; echo "ERROR: ${BASH_SOURCE[0]##*/} line $LINENO: $BASH_COMMAND (exit $rc)" >&2' ERR

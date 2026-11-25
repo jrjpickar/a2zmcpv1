@@ -20,7 +20,7 @@ const suggestions = {
   gemini: ['Give me a second opinion on this month\'s numbers.', 'Draft a follow-up email for a bid we sent last week.'],
   cloudflare: ['Brainstorm 5 ways to win more container sales.', 'Rewrite this bid follow-up to sound friendlier.'],
 };
-const traceNames = { main: 'Main', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI', execute: 'Execute (validation only)' };
+const traceNames = { estimating: 'Estimating', main: 'Main', email: 'Email', systems: 'Systems and KPIs', build: 'Development', qc: 'QC', gemini: 'Gemini', cloudflare: 'Workers AI', execute: 'Execute (validation only)' };
 const sourceLabels = { manual: 'Instruction', correction: 'Correction', praise: 'Keep doing' };
 const pct = value => (value === null || value === undefined ? 'n/a' : Math.round(value * 100) + '%');
 

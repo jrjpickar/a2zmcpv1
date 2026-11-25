@@ -1,0 +1,20 @@
+# A2Z Jose edge worker: cached GHL job lookup and text reads for Jose (voice and chat).
+# Deploy: cd edge && npx wrangler deploy
+# Secrets (dashboard Settings > Variables and Secrets, or npx wrangler secret put): EDGE_KEY, GHL_PIT_TOKEN (the MCP PIT,
+#   with conversations.readonly and conversations/message.readonly added)
+# KV:      npx wrangler kv namespace create CACHE, then paste its id below.
+name = "a2z-jose-edge"
+main = "src/index.mjs"
+compatibility_date = "2026-06-01"
+workers_dev = true
+
+# GHL_PIPELINE_ID is the demo Jobs pipeline. Labor is found by name ("Labor") unless LABOR_PIPELINE_ID is set.
+[vars]
+GHL_LOCATION_ID = "QUcu2PEAxPV1sQm1GQCq"
+GHL_PIPELINE_ID = "d5Ix1SlN3YpZ5gQewZUo"
+CONTAINER_PIPELINE_ID = "F8i8hB7E5xHrJbJUXFr4"
+CHANGE_ORDER_PIPELINE_ID = "Nvk3EKhRzg5omo4BLCOK"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"

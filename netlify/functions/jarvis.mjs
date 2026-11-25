@@ -14,6 +14,8 @@ import { json } from './lib/http.mjs';
 import { compact } from './lib/groq.mjs';
 import { report } from './lib/report.mjs';
 import { PRESETS } from './lib/alerts.mjs';
+import { createHash } from 'node:crypto';
+import { EXTRACT_INSTRUCTION, joseDesk } from './lib/jose-desk.mjs';
 
 const rememberAll = /^\s*(?:\/remember-all\b|remember for all(?: agents)?\s*:)\s*/i;
 const remember = /^\s*(?:\/remember\b|remember(?:\s+this)?\s*:)\s*/i;
@@ -143,6 +145,29 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     try {
       const usage = { total: 0, calls: 0 };
       const model = groqModel(key, transport, { model: primary, usage });
+      // Jose: change orders, estimates and GHL texts. The pending preview is kept per sign-in for "confirm".
+      if (role === 'main') {
+        const actor = access.userId || 'dashboard key';
+        const pendingKey = 'jose/pending/' + createHash('sha256').update(actor).digest('hex').slice(0, 32);
+        let pendingStore = store;
+        try { pendingStore ||= await openStore(); } catch { pendingStore = null; }
+        const saved = pendingStore ? await pendingStore.getWithMetadata(pendingKey, { type: 'json' }).catch(() => null) : null;
+        const desk = await joseDesk(prompt.trim(), saved?.data || null, {
+          env, fetchImpl, actor, actorName: 'Jose chat', access,
+          extract: text => model(EXTRACT_INSTRUCTION, { request: text }, true),
+        });
+        if (desk) {
+          let answer = desk.answer;
+          try {
+            if (!pendingStore) throw new Error();
+            if (desk.pending) await pendingStore.setJSON(pendingKey, desk.pending);
+            else if (saved?.data) await pendingStore.delete(pendingKey);
+          } catch {
+            if (desk.pending) answer = 'JARVIS storage is unavailable, so I cannot hold this for confirm. Nothing was created.';
+          }
+          return reply({ answer, trace: ['main', 'estimating'], agent: 'main' });
+        }
+      }
       const budget = Math.min(20000, Math.max(1000, Number(env.JARVIS_HISTORY_CHARS) || limits.historyBudget));
       const history = memory ? historyFor(thread, budget) : [];
       let custom = '';

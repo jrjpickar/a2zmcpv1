@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "build": "node --test",
+    "build": "node scripts/write-version.mjs && node --test",
     "build:city": "node scripts/build-city.mjs",
     "sandbox": "node sandbox/server.mjs",
     "validate": "node scripts/validate.mjs"

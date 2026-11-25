@@ -367,6 +367,21 @@ function mailPanel(panel) {
     unavailable: 'The mailbox feed is temporarily unavailable.',
   };
   if (mail.status !== 'ok') panel.append(node('p', states[mail.status], 'muted'));
+  // Email KPIs from the A2Z Email app for the selected range (null means not available, shown as a dash).
+  const e = report?.email;
+  if (e) {
+    const value = v => v == null ? '-' : number(v);
+    panel.append(rows([
+      ['Email KPIs for this range'],
+      ['Received', value(e.emailsReceived)], ['Sent', value(e.emailsSent)], ['Unanswered actionable', value(e.unansweredActionable)],
+      ['New bid invitations', value(e.newBidInvitations)], ['Upcoming bid deadlines', value(e.upcomingBidDeadlines)],
+      ['Missed bid deadlines', value(e.missedBidDeadlines)], ['Proposal follow-ups due', value(e.outstandingProposalFollowups)],
+      ['Average response', e.averageResponseHours == null ? '-' : e.averageResponseHours + ' h'],
+      ['Active GC relationships', value(e.activeGcRelationships)], ['Operational alerts', value(e.operationalAlerts)],
+      ['AI requests', value(e.aiRequests), e.estimatedNeurons == null ? null : 'About ' + number(e.estimatedNeurons) + ' Cloudflare neurons'],
+      ['Last email sync', e.lastSuccessfulSync ? new Date(e.lastSuccessfulSync).toLocaleString() : '-'],
+    ]));
+  }
   if (mail.stats) {
     const stats = mail.stats;
     panel.append(rows([

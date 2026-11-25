@@ -1,0 +1,12 @@
+[Unit]
+Description=A2Z MCP: follow the published Netlify deploy (download, build, swap, health check, roll back on failure)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=A2Z_REPO=@REPO@
+ExecStart=/usr/local/bin/a2z-auto-update
+# A build on the 1 GB VM takes a few minutes. Stop a stuck run well before memory or disk runs out.
+TimeoutStartSec=20min
+Nice=10

@@ -1,7 +1,8 @@
 import { dashboardAccess, marketplaceIdentity } from './lib/dashboard-auth.mjs';
 import { json } from './lib/http.mjs';
 import { askVoice } from './lib/voice/brain.mjs';
-import { readBody, reasoningProviders, speechModes, synthesize, transcribe } from './lib/voice/providers.mjs';
+import { readBody, reason, reasoningProviders, speechModes, synthesize, transcribe } from './lib/voice/providers.mjs';
+import { EXTRACT_INSTRUCTION, joseDesk } from './lib/jose-desk.mjs';
 import { charge, digest, fault, issueKey, limit, linkedIdentity, nonce, origin, safeEqual, signLaunch, stateStore, update } from './lib/voice/state.mjs';
 
 const running = new Map();
@@ -27,6 +28,17 @@ function assertSession(session, env) {
   if (session.dashboard && session.dashboard !== digest(env.DASHBOARD_KEY || '')) throw invalidSession();
   return session;
 }
+
+// Jose actions by voice: change orders, estimates and texts. The pending preview lives in the session.
+function voiceAccess(session, env) {
+  if (session.dashboard) return { admin: true, mailbox: true };
+  return marketplaceIdentity(session, env) || { admin: false, mailbox: false };
+}
+const voiceExtract = ctx => async text => {
+  const { answer } = await reason(ctx, [{ role: 'system', content: EXTRACT_INSTRUCTION }, { role: 'user', content: text }]);
+  const raw = answer.replace(/^```(?:json)?\s*|\s*```$/g, '');
+  return JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
+};
 
 function validateWav(wav) {
   if (wav.length < 44 + 3200 || wav.length % 2 || wav.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -113,6 +125,19 @@ async function turn(request, body, env, store, key, fetchImpl) {
     const sttMs = wav ? Math.round(performance.now() - started) : 0;
     if (!transcript) return json({ transcript: '', answer: '', timings: { sttMs } });
     await currentTurn();
+    const desk = await joseDesk(transcript, session.pending, {
+      env, fetchImpl, signal, voice: true, actor: session.userId || 'dashboard key', actorName: 'Jose voice',
+      access: voiceAccess(session, env), extract: voiceExtract(ctx),
+    });
+    if (desk) {
+      await currentTurn();
+      await update(store, key, current => ({ ...assertSession(current, env), pending: desk.pending || null }));
+      const ttsStart = performance.now();
+      const audio = body.speak === true ? await synthesize(ctx, desk.answer) : null;
+      await currentTurn();
+      return json({ answer: desk.answer, provider: 'jose', preset: presets.includes(body.preset) ? body.preset : 'mtd', transcript, audio,
+        timings: { sttMs, ttsMs: audio ? Math.round(performance.now() - ttsStart) : null } });
+    }
     const result = await askVoice({ ...ctx, beforeReasoning: currentTurn }, transcript, history, presets.includes(body.preset) ? body.preset : 'mtd');
     await currentTurn();
     const ttsStart = performance.now();
