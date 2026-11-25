@@ -2,7 +2,7 @@
 // Ported from the LocalCare Props V3 memory layer, plus A2Z additions: shared company memory,
 // playbook versions with automatic rollback, pinned chats, chat search, custom bots and a history budget.
 // Storage is any key/value adapter with getWithMetadata, setJSON (conditional writes) and delete, such as Netlify Blobs.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { topicFor } from '../../../public/topic-rules.mjs';
 
 export { openJarvisStore, STORE_NAME } from './jarvis-store.mjs';
@@ -29,7 +29,7 @@ export function similarity(a, b) {
 
 export const clip = (value, max) => String(value ?? '').replace(/[\u2013\u2014]/g, '-').trim().slice(0, max);
 const now = () => new Date().toISOString();
-const keys = {
+const sharedKeys = {
   index: role => 'index/' + role,
   thread: (role, id) => 'thread/' + role + '/' + id,
   memory: role => 'memory/' + role,
@@ -94,7 +94,12 @@ const sortThreads = threads => [...threads].sort((a, b) => Number(Boolean(b.pinn
 const slug = name => clip(name, 40).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
 export const botContexts = ['metrics', 'mail', 'none'];
 
-export function createMemory(store) {
+export function createMemory(store, userId) {
+  const namespace = userId ? 'users/' + createHash('sha256').update(userId).digest('hex') + '/' : '';
+  const keys = { ...sharedKeys,
+    index: role => (role === 'main' ? namespace : '') + sharedKeys.index(role),
+    thread: (role, id) => (role === 'main' ? namespace : '') + sharedKeys.thread(role, id),
+  };
   const memory = {
     async listThreads(role) {
       return sortThreads((await read(store, keys.index(role), () => ({ threads: [] }))).threads);
@@ -353,6 +358,7 @@ export function createMemory(store) {
       const learnerMemory = await (async () => {
         const thread = await memory.getThread(role, threadId);
         const message = thread?.messages.find(item => item.id === messageId && item.role === 'assistant');
+        if (message?.meta?.deskOwner) throw fail('Desk lookup replies do not update the shared playbook.', 400);
         if (message?.meta?.agent && message.meta.agent !== role && await canLearn(message.meta.agent)) learner = message.meta.agent;
         return memory.getMemory(learner);
       })();
@@ -528,7 +534,7 @@ export function sharedFor(entries) {
 // Recent turns as chat messages for the model: the last 6 messages, each clipped, then trimmed
 // from the oldest until the total fits the character budget.
 export function historyFor(thread, budget = limits.historyBudget) {
-  const turns = (thread?.messages || []).slice(-limits.history).map(message => ({
+  const turns = (thread?.messages || []).filter(message => !message.meta?.deskOwner).slice(-limits.history).map(message => ({
     role: message.role === 'assistant' ? 'assistant' : 'user',
     content: [message.meta?.buildSummary, message.content].filter(Boolean).join('\n').slice(0, limits.historyChars),
   }));

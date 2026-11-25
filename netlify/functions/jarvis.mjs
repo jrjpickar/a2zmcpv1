@@ -1,3 +1,5 @@
+import { deskActor } from './lib/dashboard-auth.mjs';
+import { deskRead, deskRequest, addressIn, projectIn } from './lib/jose-desk-read.mjs';
 import { createGroqFailover } from './lib/jarvis-failover.mjs';
 import { modelLogger } from './lib/model-log.mjs';
 // POST /api/jarvis { role, prompt, threadId?, newThread?, previousTask?, preset?, plan? }
@@ -15,7 +17,7 @@ import { compact } from './lib/groq.mjs';
 import { report } from './lib/report.mjs';
 import { PRESETS } from './lib/alerts.mjs';
 import { createHash } from 'node:crypto';
-import { EXTRACT_INSTRUCTION, joseDesk } from './lib/jose-desk.mjs';
+import { detectIntent, EXTRACT_INSTRUCTION, joseDesk } from './lib/jose-desk.mjs';
 
 const rememberAll = /^\s*(?:\/remember-all\b|remember for all(?: agents)?\s*:)\s*/i;
 const remember = /^\s*(?:\/remember\b|remember(?:\s+this)?\s*:)\s*/i;
@@ -27,7 +29,7 @@ async function systemContext(preset) {
 
 function assistantRecord(result) {
   const meta = {};
-  for (const name of ['trace', 'approved', 'buildSummary', 'agent', 'plan', 'planHash', 'warnings', 'validation', 'usage', 'mailAsOf', 'execute']) {
+  for (const name of ['trace', 'approved', 'buildSummary', 'agent', 'plan', 'planHash', 'warnings', 'validation', 'usage', 'mailAsOf', 'execute', 'deskLinks', 'deskContext', 'deskOwner']) {
     if (result[name] !== undefined) meta[name] = result[name];
   }
   if (meta.plan && Buffer.byteLength(JSON.stringify(meta.plan)) > 12000) delete meta.plan;
@@ -59,16 +61,49 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     }
     if (role === 'email' && !access.mailbox) return json({ error: 'Mailbox access is not enabled for this sign-in.' }, 403);
 
+    const requestStarted = performance.now();
+    const operator = deskActor(access, env);
+    const chatIdentity = operator && (access.userId ? operator : "dashboard:" + operator);
     // Chat mode loads the thread, learned memory, company memory and bots. Custom bots always need storage.
     const requestedRole = role;
     const chat = Boolean(threadId || newThread);
     let store = null, memory = null, thread = null, learned = null, shared = [], bots = [];
-    if (chat || role.startsWith('bot-') || role === 'main') {
+    if (role === 'main' && chat) {
       try {
         store = await openStore();
-        memory = createMemory(store);
+        memory = createMemory(store, chatIdentity);
+        if (threadId) thread = await memory.getThread(role, threadId);
+      } catch {
+        return json({ error: 'JARVIS memory storage is unavailable.' }, 503);
+      }
+      if (threadId && !thread) return json({ error: 'Chat not found. Start a new chat.' }, 404);
+    }
+    const owner = chatIdentity ? createHash('sha256').update(chatIdentity).digest('hex') : null;
+    const last = owner && thread?.messages?.findLast(message => message.meta?.deskOwner === owner);
+    const previousUser = thread?.messages?.findLast(message => message.role === 'user')?.content || '';
+    const deskState = owner && last?.meta?.deskOwner === owner ? last.meta.deskContext : null;
+    const deskInput = role === 'main' && !remember.test(prompt) && !rememberAll.test(prompt)
+      ? deskRequest(prompt, previousUser, deskState) : null;
+    if (deskInput) {
+      const lookupStarted = performance.now();
+      const result = await deskRead(deskInput, { env, fetchImpl, actor: operator, signal: request.signal });
+      const lookupFinished = performance.now();
+      const payload = { answer: result.answer, trace: ['main', 'estimating'], agent: 'main', deskLinks: result.links,
+        deskContext: result.state, deskOwner: owner };
+      try {
+        return await reply(payload);
+      } finally {
+        console.info('Jose Desk timing', { lookupMs: Math.round(lookupFinished - lookupStarted), modelMs: 0,
+          chatStorageMs: Math.round(lookupStarted - requestStarted + performance.now() - lookupFinished) });
+      }
+    }
+
+    if (chat || role.startsWith('bot-') || role === 'main') {
+      try {
+        store ||= await openStore();
+        memory ||= createMemory(store, chatIdentity);
         [thread, learned, shared, bots] = await Promise.all([
-          chat && threadId ? memory.getThread(role, threadId) : null,
+          thread || (chat && threadId ? memory.getThread(role, threadId) : null),
           chat ? memory.getMemory(role) : null,
           chat ? memory.getShared() : [],
           memory.getBots(),
@@ -89,10 +124,10 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       try {
         if (!thread) {
           const title = prompt.startsWith('/execute') ? 'Execute: ' + (result.plan?.task || 'plan') : prompt;
-          thread = await memory.createThread(requestedRole, title, await classifier?.(title));
+          thread = await memory.createThread(requestedRole, title, result.deskOwner !== undefined ? undefined : await classifier?.(title));
         }
         const { reply: stored, title } = await memory.appendExchange(requestedRole, thread.id, prompt.trim(), assistantRecord(result));
-        if (result.trace && !result.lesson && !result.execute) {
+        if (result.deskOwner === undefined && result.trace && !result.lesson && !result.execute) {
           await memory.recordFact(requestedRole, prompt);
           await memory.recordRun(requestedRole, { approved: requestedRole === result.agent ? result.approved : undefined });
           if (result.agent && result.agent !== requestedRole && (builtinRoles.includes(result.agent) || bots.some(bot => bot.id === result.agent))) {
@@ -142,18 +177,33 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
     if (!key && !(role === 'gemini' && geminiKey) && !(role === 'cloudflare' && cfAccount && cfToken)) return json({ error: 'Set GROQ_API_KEY to use JARVIS agents.' }, 503);
     if (running) return json({ error: 'JARVIS is processing another task. Retry shortly.' }, 429);
     running = true;
+    let modelMs = 0;
     try {
       const usage = { total: 0, calls: 0 };
-      const model = groqModel(key, transport, { model: primary, usage });
+      const baseModel = groqModel(key, transport, { model: primary, usage });
+      const model = async (...args) => {
+        const started = performance.now();
+        try { return await baseModel(...args); }
+        finally { modelMs += performance.now() - started; }
+      };
       // Jose: change orders, estimates and GHL texts. The pending preview is kept per sign-in for "confirm".
       if (role === 'main') {
-        const actor = access.userId || 'dashboard key';
-        const pendingKey = 'jose/pending/' + createHash('sha256').update(actor).digest('hex').slice(0, 32);
+        if (operator && newThread && !thread && memory && ['change', 'proposal'].includes(detectIntent(prompt))) {
+          thread = await memory.createThread(requestedRole, prompt);
+          threadId = thread.id;
+        }
+        const actor = operator || 'dashboard key';
+        const pendingKey = 'jose/pending/' + createHash('sha256').update((chatIdentity || actor) + (operator && threadId ? '/' + threadId : '')).digest('hex').slice(0, 32);
         let pendingStore = store;
         try { pendingStore ||= await openStore(); } catch { pendingStore = null; }
         const saved = pendingStore ? await pendingStore.getWithMetadata(pendingKey, { type: 'json' }).catch(() => null) : null;
         const desk = await joseDesk(prompt.trim(), saved?.data || null, {
-          env, fetchImpl, actor, actorName: 'Jose chat', access,
+          env, fetchImpl, actor, actorName: 'Jose chat', access, scoped: Boolean(operator),
+          resolveJob: operator ? (text, job) => {
+            const query = addressIn(text) || job || projectIn(text);
+            const target = query ? { query } : deskState?.jobId ? { jobId: deskState.jobId } : {};
+            return deskRead({ view: 'status', ...target }, { env, fetchImpl, actor: operator, signal: request.signal });
+          } : null,
           extract: text => model(EXTRACT_INSTRUCTION, { request: text }, true),
         });
         if (desk) {
@@ -165,7 +215,8 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
           } catch {
             if (desk.pending) answer = 'JARVIS storage is unavailable, so I cannot hold this for confirm. Nothing was created.';
           }
-          return reply({ answer, trace: ['main', 'estimating'], agent: 'main' });
+          return reply({ answer, trace: ['main', 'estimating'], agent: 'main',
+            ...(desk.state ? { deskContext: desk.state, deskOwner: owner } : {}) });
         }
       }
       const budget = Math.min(20000, Math.max(1000, Number(env.JARVIS_HISTORY_CHARS) || limits.historyBudget));
@@ -200,6 +251,7 @@ export function createJarvisHandler({ env = process.env, fetchImpl = fetch, read
       return json({ error: error.agentStatus ? error.message : 'JARVIS could not complete the task. Check your provider settings and retry.' }, error.agentStatus || 502);
     } finally {
       running = false;
+      if (modelMs) console.info('JARVIS model timing', { modelMs: Math.round(modelMs) });
       // Model log rows finish in the background. Netlify keeps the function alive for them with waitUntil.
       const flushed = log.flush(5000);
       if (typeof context?.waitUntil === 'function') context.waitUntil(flushed);

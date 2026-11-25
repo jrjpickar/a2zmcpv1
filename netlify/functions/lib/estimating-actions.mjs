@@ -30,7 +30,7 @@ export async function createOpportunity(body, { env = process.env, fetchImpl = f
 
 // Jose change orders and proposals. Same bridge, key and preview/confirm contract as createOpportunity.
 const DESK_ACTIONS = new Set(['draft_change_order', 'start_proposal']);
-export async function deskAction(body, { env = process.env, fetchImpl = fetch } = {}) {
+export async function deskAction(body, { env = process.env, fetchImpl = fetch, scoped = false } = {}) {
   if (!DESK_ACTIONS.has(body?.action)) return { status: 400, data: { error: 'Unknown Desk action.' } };
   let url;
   try {
@@ -44,11 +44,11 @@ export async function deskAction(body, { env = process.env, fetchImpl = fetch } 
     const response = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-jarvis-action-key': env.ESTIMATING_ACTION_KEY },
-      body: JSON.stringify(body),
+      body: JSON.stringify(scoped ? { ...body, operation: body.action, action: "jose_write" } : body),
       redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
-    if (![200, 400, 404, 409, 422, 502, 503].includes(response.status)) throw new Error();
+    if (![200, 400, 403, 404, 409, 422, 502, 503].includes(response.status)) throw new Error();
     const data = await response.json();
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
     return { status: response.status, data };

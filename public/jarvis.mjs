@@ -317,7 +317,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
   }
 
   function feedbackBar(message) {
-    if (!message.id || !threadId || !message.meta?.trace || message.meta.execute) return null;
+    if (!message.id || !threadId || !message.meta?.trace || message.meta.execute || message.meta.deskOwner) return null;
     const bar = node('div', { className: 'jarvis-feedback' });
     const draw = () => {
       bar.replaceChildren();
@@ -360,6 +360,14 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
     if (tags.length) box.append(node('div', { className: 'jarvis-trace' }, tags.join(' · ')));
     if (meta.buildSummary) box.append(formatted(meta.buildSummary));
     box.append(formatted(message.content));
+    for (const link of meta.deskLinks || []) {
+      try {
+        const url = new URL(link.url);
+        if (url.protocol === 'https:' && !url.username && !url.password) {
+          box.append(node('p', {}, node('a', { href: url.href, target: '_blank', rel: 'noopener noreferrer' }, link.label)));
+        }
+      } catch { /* Skip invalid URLs in stored messages. */ }
+    }
     box.append(...[planView(meta), feedbackBar(message)].filter(Boolean));
     return box;
   }
@@ -452,7 +460,7 @@ export function createJarvisPanel({ headers, preset = () => 'mtd' }) {
       }
       if (role !== requestedRole) return;
       const meta = {};
-      for (const name of ['trace', 'approved', 'buildSummary', 'agent', 'plan', 'planHash', 'warnings', 'validation', 'usage', 'execute']) if (result[name] !== undefined) meta[name] = result[name];
+      for (const name of ['trace', 'approved', 'buildSummary', 'agent', 'plan', 'planHash', 'warnings', 'validation', 'usage', 'execute', 'deskLinks', 'deskOwner']) if (result[name] !== undefined) meta[name] = result[name];
       messages.push({ id: result.messageId, role: 'assistant', content: result.answer, meta });
       if (result.threadId) {
         if (command.newThread) topicMap.classified(result.threadId);

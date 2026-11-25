@@ -57,11 +57,21 @@ export function mountVoice(root, { launch, getHeaders = () => ({}), getPreset = 
     get('interrupt').disabled = !pending && !playback;
     get('text').disabled = form.querySelector('button').disabled = !ready;
   }
-  function addLine(who, value) {
+  function addLine(who, value, links = []) {
     const line = document.createElement('p');
     const name = document.createElement('strong');
     name.textContent = who + ' ';
     line.append(name, document.createTextNode(value));
+    for (const link of links) {
+      try {
+        const url = new URL(link.url);
+        if (url.protocol !== 'https:' || url.username || url.password) continue;
+        const anchor = document.createElement('a');
+        anchor.href = url.href; anchor.target = '_blank'; anchor.rel = 'noopener noreferrer';
+        anchor.textContent = link.label;
+        line.append(document.createElement('br'), anchor);
+      } catch { /* Skip invalid result URLs. */ }
+    }
     get('log').append(line);
     while (get('log').children.length > 40) get('log').firstChild.remove();
     get('log').scrollTop = get('log').scrollHeight;
@@ -173,7 +183,7 @@ export function mountVoice(root, { launch, getHeaders = () => ({}), getPreset = 
       controls();
     }
     const startTime = () => {
-      const { sttMs, mcpMs, reasoningMs, ttsMs } = result.timings;
+      const { sttMs, mcpMs, reasoningMs, ttsMs, lookupMs, modelMs, storageMs } = result.timings;
       const timings = 'STT ' + sttMs + ' ms · MCP ' + mcpMs + ' ms · Brain ' + reasoningMs + ' ms' +
         (ttsMs == null ? '' : ' · TTS ' + ttsMs + ' ms');
       get('timings').textContent = timings + ' · Playback ' + Math.round(performance.now() - at) + ' ms';
@@ -231,12 +241,17 @@ export function mountVoice(root, { launch, getHeaders = () => ({}), getPreset = 
       pending = null;
       if (!result.answer) return idle();
       if (!input.text) addLine('You', result.transcript);
-      addLine('Brain', result.answer);
+      addLine('Brain', result.answer, result.deskLinks);
       preset = result.preset;
-      history = [...history, { role: 'user', content: result.transcript }, { role: 'assistant', content: result.answer }].slice(-6);
-      const { sttMs, mcpMs, reasoningMs, ttsMs } = result.timings;
-      get('timings').textContent = 'STT ' + sttMs + ' ms · MCP ' + mcpMs + ' ms · Brain ' + reasoningMs + ' ms' +
-        (ttsMs == null ? '' : ' · TTS ' + ttsMs + ' ms');
+      if (result.timings.lookupMs == null) {
+        history = [...history, { role: 'user', content: result.transcript }, { role: 'assistant', content: result.answer }].slice(-6);
+      }
+      const { sttMs, mcpMs, reasoningMs, ttsMs, lookupMs, modelMs, storageMs } = result.timings;
+      const segments = ['STT ' + sttMs + ' ms'];
+      if (lookupMs != null) segments.push('Desk ' + lookupMs + ' ms', 'Model ' + modelMs + ' ms', 'Storage ' + storageMs + ' ms');
+      else if (mcpMs != null) segments.push('MCP ' + mcpMs + ' ms', 'Brain ' + reasoningMs + ' ms');
+      if (ttsMs != null) segments.push('TTS ' + ttsMs + ' ms');
+      get('timings').textContent = segments.join(' · ');
       speak(result, at);
     } catch (error) {
       if (pending !== current) return;

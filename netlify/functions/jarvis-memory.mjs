@@ -1,3 +1,4 @@
+import { deskActor } from './lib/dashboard-auth.mjs';
 // Chat history, learned memory, company memory and custom bots for the A2Z JARVIS agents. Admin dashboard access required.
 // GET  ?role=build                  -> chats, learned memory, company memory and bots
 // GET  ?role=build&thread=<id>      -> one chat with its messages
@@ -42,7 +43,7 @@ export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch
 
   return async function handler(request) {
     const url = new URL(request.url);
-    const { response } = guard(request, { env, methods: ['GET', 'POST'] });
+    const { access, response } = guard(request, { env, methods: ['GET', 'POST'] });
     if (response) return response;
     let command;
     if (request.method === 'POST') {
@@ -57,7 +58,8 @@ export function createJarvisMemoryHandler({ env = process.env, fetchImpl = fetch
     if (typeof role !== 'string' || !rolePattern.test(role)) return json({ error: 'Select a JARVIS agent.' }, 400);
     let memory;
     try {
-      memory = createMemory(await openStore());
+      const operator = deskActor(access, env);
+      memory = createMemory(await openStore(), operator && (access.userId ? operator : "dashboard:" + operator));
     } catch {
       return json({ error: 'JARVIS memory storage is unavailable.' }, 503);
     }

@@ -1,3 +1,5 @@
+import { deskActor } from './lib/dashboard-auth.mjs';
+import { addressIn, deskRead, deskRequest, projectIn } from './lib/jose-desk-read.mjs';
 import { dashboardAccess, marketplaceIdentity } from './lib/dashboard-auth.mjs';
 import { json } from './lib/http.mjs';
 import { askVoice } from './lib/voice/brain.mjs';
@@ -125,18 +127,37 @@ async function turn(request, body, env, store, key, fetchImpl) {
     const sttMs = wav ? Math.round(performance.now() - started) : 0;
     if (!transcript) return json({ transcript: '', answer: '', timings: { sttMs } });
     await currentTurn();
-    const desk = await joseDesk(transcript, session.pending, {
-      env, fetchImpl, signal, voice: true, actor: session.userId || 'dashboard key', actorName: 'Jose voice',
-      access: voiceAccess(session, env), extract: voiceExtract(ctx),
+    const access = voiceAccess(session, env);
+    const operator = deskActor(access, env);
+    const context = session.deskActor === operator ? session.deskContext : null;
+    const lookup = operator && access.admin ? deskRequest(transcript, '', context) : null;
+    const deskStarted = performance.now();
+    const read = options => deskRead(options, { env, fetchImpl, signal, actor: operator });
+    const desk = lookup ? await read(lookup) : await joseDesk(transcript, (session.deskActor ?? null) === operator ? session.pending : null, {
+      env, fetchImpl, signal, voice: true, actor: operator || 'dashboard key', actorName: 'Jose voice',
+      access, extract: voiceExtract(ctx), scoped: Boolean(operator),
+      resolveJob: operator ? (text, job) => {
+        const query = addressIn(text) || job || projectIn(text);
+        return read({ view: 'status', ...(query ? { query } : context?.jobId ? { jobId: context.jobId } : {}) });
+      } : null,
     });
     if (desk) {
       await currentTurn();
-      await update(store, key, current => ({ ...assertSession(current, env), pending: desk.pending || null }));
+      const lookupMs = lookup ? Math.round(performance.now() - deskStarted) : null;
+      const storageStarted = performance.now();
+      await update(store, key, current => ({ ...assertSession(current, env),
+        pending: lookup && session.deskActor === operator ? current.pending : desk.pending || null,
+        deskActor: operator,
+        deskContext: lookup || desk.state ? desk.state : context,
+      }));
+      const storageMs = Math.round(performance.now() - storageStarted);
       const ttsStart = performance.now();
       const audio = body.speak === true ? await synthesize(ctx, desk.answer) : null;
       await currentTurn();
       return json({ answer: desk.answer, provider: 'jose', preset: presets.includes(body.preset) ? body.preset : 'mtd', transcript, audio,
-        timings: { sttMs, ttsMs: audio ? Math.round(performance.now() - ttsStart) : null } });
+        deskLinks: desk.links,
+        timings: { sttMs, ttsMs: audio ? Math.round(performance.now() - ttsStart) : null,
+          ...(lookup ? { lookupMs, modelMs: 0, storageMs } : {}) } });
     }
     const result = await askVoice({ ...ctx, beforeReasoning: currentTurn }, transcript, history, presets.includes(body.preset) ? body.preset : 'mtd');
     await currentTurn();

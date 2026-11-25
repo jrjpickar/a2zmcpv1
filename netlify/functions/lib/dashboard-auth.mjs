@@ -67,3 +67,12 @@ export function dashboardAccess(request, env = process.env) {
   if (request.headers.has('x-a2z-session')) return marketplaceSession(request, env);
   return authorized(request, env.DASHBOARD_KEY, 'x-a2z-key') ? { admin: true, mailbox: true } : null;
 }
+
+
+// A standalone dashboard credential represents one configured Desk operator.
+// Keep this mapping server-side and separate from Marketplace identity.
+export function deskActor(access, env) {
+  if (access?.userId) return access.userId;
+  const userId = env.ESTIMATING_DASHBOARD_USER_ID?.trim();
+  return access?.admin && /^[\w-]{1,100}$/.test(userId || '') ? userId : null;
+}

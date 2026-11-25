@@ -103,6 +103,9 @@ async function confirm(pending, ctx) {
   if (status === 409 && data.preview?.canConfirm) {
     return { answer: 'The job changed since the preview. ' + readback(data.preview, pending.args), pending: { ...pending, hash: data.preview.hash, idempotencyKey: randomUUID(), expires: ctx.now() + PENDING_MS } };
   }
+  if (ctx.scoped && status >= 500) {
+    return { answer: 'The Desk could not verify the outcome. Check the record before retrying.', pending: null };
+  }
   return { answer: (data.error || 'The Desk did not complete it.') + ' Nothing was created.', pending: null };
 }
 
@@ -131,14 +134,15 @@ async function texts(text, ctx) {
 export async function joseDesk(text, pending, input) {
   const ctx = { now: Date.now, ...input };
   const live = pending && pending.expires > ctx.now() ? pending : null;
-  if (live && confirmWords.test(text)) {
+  const confirmed = ctx.scoped ? /^(?:confirm|yes[, ]+confirm)[.!]?$/i.test(text.trim()) : confirmWords.test(text);
+  if (live && confirmed) {
     if (!ctx.access?.admin) return { answer: 'Administrator access is required.', pending: null };
     return confirm(live, ctx);
   }
   if (live && cancelWords.test(text)) return { answer: 'Canceled. Nothing was created.', pending: null };
   const intent = detectIntent(text);
   if (!intent) {
-    if (pending && !live && confirmWords.test(text)) return { answer: 'That preview expired. Ask again and I will rebuild it.', pending: null };
+    if (pending && !live && confirmed) return { answer: 'That preview expired. Ask again and I will rebuild it.', pending: null };
     return null;
   }
   try {
@@ -152,6 +156,16 @@ export async function joseDesk(text, pending, input) {
     }
     if (!ctx.access?.admin) return { answer: 'Administrator access is required for change orders and estimates.', pending: live };
     const { job, change } = await fields(text, ctx.extract);
+    if (ctx.resolveJob) {
+      if (intent === 'change' && !change) return { answer: 'What changed on the job? Include the change when asking to draft the change order.', pending: live };
+      const resolved = await ctx.resolveJob(text, job);
+      const jobId = resolved.verified ? resolved.state?.jobId : null;
+      if (!jobId) return { answer: resolved.answer, pending: live, state: resolved.state };
+      const next = intent === 'change'
+        ? await previewAction('draft_change_order', { jobId, description: change, requestedBy: clean(ctx.actorName || ctx.actor, 120) }, ctx)
+        : await previewAction('start_proposal', { jobId }, ctx);
+      return { ...next, state: resolved.state };
+    }
     if (!job) return { answer: intent === 'change' ? 'Which job, and what changed? For example: draft a change order on 123 Main for 400 square feet of extra drywall demo.' : 'Which job should I start the estimate on?', pending: live };
     if (intent === 'change' && !change) return { answer: 'What changed on ' + job + '? Say it in one sentence with the job, like: change order on ' + job + ' for the extra back wall.', pending: live };
     // Change orders hang off won Demo jobs (Labor and Containers are searched so Jose can say why not).

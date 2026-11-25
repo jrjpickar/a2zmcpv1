@@ -711,9 +711,21 @@ function addNote(id, text) {
 function agentMessage(message, agent) {
   const item = node('div', undefined, 'agent-msg ' + message.role + (message.error ? ' error' : ''));
   for (const line of String(message.content || '').split('\n').map(l => l.trim()).filter(Boolean)) item.append(node('p', line.replace(/\*\*/g, '')));
+  for (const link of message.deskLinks || []) {
+    try {
+      const url = new URL(link.url);
+      if (url.protocol === 'https:' && !url.username && !url.password) {
+        const anchor = node('a', link.label);
+        anchor.href = url.href; anchor.target = '_blank'; anchor.rel = 'noopener noreferrer';
+        const line = node('p');
+        line.append(anchor);
+        item.append(line);
+      }
+    } catch { /* Skip invalid result URLs. */ }
+  }
   if (message.note) item.append(node('small', message.note));
   if (message.plan) item.append(planCard(message, agent));
-  if (message.id && message.role === 'assistant' && !message.error) item.append(rateBar(message, agent));
+  if (message.id && message.role === 'assistant' && !message.error && !message.deskOwner) item.append(rateBar(message, agent));
   return item;
 }
 // Teach from the city: the same feedback the Jose tab sends.
@@ -873,7 +885,7 @@ async function sendToAgent(agent, text) {
     for (let i = 0; i < trace.length - 1; i++) { map.agentFlow?.(trace[i], trace[i + 1], delay); map.agentState?.(trace[i + 1], 'busy'); delay += 0.9; }
     for (let i = trace.length - 1; i > 0; i--) { map.agentFlow?.(trace[i], trace[i - 1], delay); delay += 0.9; }
     const route = trace.slice(1).map(agentName);
-    const message = { id: data.messageId, role: 'assistant', content: data.answer || data.error || 'No answer.',
+    const message = { id: data.messageId, role: 'assistant', deskLinks: data.deskLinks, deskOwner: data.deskOwner, content: data.answer || data.error || 'No answer.',
       note: [route.length ? 'Via ' + route.join(' > ') : '', data.memoryError || ''].filter(Boolean).join(' · '),
       plan: data.plan && data.planHash && data.validation?.ok !== false ? data.plan : null, planHash: data.planHash, approved: data.approved };
     setTimeout(() => {
