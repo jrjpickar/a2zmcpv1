@@ -1,4 +1,5 @@
 import { dashboardAccess } from './lib/dashboard-auth.mjs';
+import { enqueueRelay, readRelayStatus } from './lib/jose-relay.mjs';
 import { json } from './lib/http.mjs';
 
 export default async function handler(request, { env = process.env, fetchImpl = fetch } = {}) {
@@ -7,6 +8,23 @@ export default async function handler(request, { env = process.env, fetchImpl = 
   const origin = request.headers.get('origin');
   if (request.method === 'POST' && origin && origin !== new URL(request.url).origin) {
     return json({ error: 'Origin rejected' }, 403);
+  }
+  if (env.JOSE_RELAY === 'supabase' || (!env.JOSE_RELAY && !env.JOSE_RUNTIME_URL &&
+    env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY && env.JOSE_TOKEN)) {
+    try {
+      if (request.method === 'GET') {
+        const status = await readRelayStatus(env, fetchImpl);
+        return status ? json(status) : json({ error: 'Waiting for JOSE worker' }, 503);
+      }
+      const body = await request.text();
+      if (Buffer.byteLength(body) > 16000) return json({ error: 'Payload too large' }, 413);
+      let input;
+      try { input = JSON.parse(body); }
+      catch { return json({ error: 'Invalid JSON' }, 400); }
+      const { code, id } = await enqueueRelay(input, env, fetchImpl);
+      if (code === 202) return json({ accepted: true, id }, code);
+      return json({ error: code === 409 ? 'A JOSE command is already pending' : 'Waiting for JOSE worker' }, code);
+    } catch { return json({ error: 'JOSE relay unavailable' }, 502); }
   }
   if (!env.JOSE_RUNTIME_URL || (env.JOSE_TOKEN || '').length < 32) {
     return json({ error: 'JOSE runtime is not configured' }, 503);

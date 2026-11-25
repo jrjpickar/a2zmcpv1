@@ -35,6 +35,7 @@ export function createRuntime(env = process.env, fetchImpl = fetch) {
   let tools = { status: 'unconfigured', catalog: state.catalog || [] };
   let lastDiscovery = 0;
   let ticking = false;
+  let batching = false;
   let gateway = 'unconfigured';
   const started = Date.now();
 
@@ -52,6 +53,7 @@ export function createRuntime(env = process.env, fetchImpl = fetch) {
   }
 
   function save() {
+    if (batching) return;
     writeFileSync(path + '.tmp', JSON.stringify(state), { mode: 0o600, flush: true });
     renameSync(path + '.tmp', path);
   }
@@ -226,7 +228,8 @@ export function createRuntime(env = process.env, fetchImpl = fetch) {
   }
 
   const status = () => ({
-    ...state, tools, gateway, configError, profiles: [...profileNames],
+    tasks: state.tasks, stopped: state.stopped, events: state.events, monitors: state.monitors,
+    relayReceipt: state.relayReceipt, tools, gateway, configError, profiles: [...profileNames],
     providers: routes(config, env).map(route => ({
       provider: route.provider, model: route.model, limits: { rpm: route.rpm, rpd: route.rpd,
         tpm: route.tpm, tpd: route.tpd }, modelUsage: { ...usage(routeId(route), Date.now()) },
@@ -280,6 +283,20 @@ export function createRuntime(env = process.env, fetchImpl = fetch) {
     return 409;
   }
 
+  function applyRelayCommand(id, input) {
+    const now = Date.now();
+    const seen = (state.relaySeen || []).filter(receipt => receipt.at > now - 120000);
+    if (seen.some(receipt => receipt.id === id)) return;
+    batching = true;
+    try {
+      const status = command(input);
+      state.relayReceipt = { id, status, at: now };
+      state.relaySeen = [...seen, state.relayReceipt];
+      if (status >= 400) event('relay command rejected');
+    } finally { batching = false; }
+    save();
+  }
+
   const server = createServer(async (req, res) => {
     const send = (code, body) => {
       res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -308,12 +325,26 @@ export function createRuntime(env = process.env, fetchImpl = fetch) {
     return send(code, code < 400 ? { ok: true } : { error: 'Invalid request or task state' });
   });
   refresh();
-  return { server, tick, status, command };
+  return { server, tick, status, command, applyRelayCommand };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const runtime = createRuntime();
   runtime.server.listen(Number(process.env.JOSE_PORT || 8789), '127.0.0.1');
+  if (process.env.JOSE_RELAY === 'supabase') {
+    const { createRelayWorker } = await import('../netlify/functions/lib/jose-relay.mjs');
+    const poll = createRelayWorker(process.env, runtime);
+    let failed = false;
+    const run = () => poll().then(() => {
+      if (failed) console.info('JOSE relay recovered');
+      failed = false;
+    }).catch(() => {
+      if (!failed) console.error('JOSE relay unavailable');
+      failed = true;
+    });
+    void run();
+    setInterval(run, 5000);
+  }
   await runtime.tick();
   setInterval(() => runtime.tick().catch(error => {
     console.error('JOSE scheduler failed:', error.code || error.name);

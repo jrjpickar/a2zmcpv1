@@ -49,6 +49,7 @@ export function createRuntimePanel(headers) {
   let busy = false;
   let stopped = false;
   let lastState = '';
+  let pending = null;
 
   async function request(input) {
     const response = await fetch('/api/jose-runtime', input ? {
@@ -60,6 +61,13 @@ export function createRuntimePanel(headers) {
   }
 
   function render(data) {
+    if (pending && data.relayReceipt?.id === pending.id) {
+      message.textContent = data.relayReceipt.status < 400 ? 'JOSE applied the command.' : 'JOSE rejected the command.';
+      pending = null;
+    } else if (pending && Date.now() > pending.deadline) {
+      message.textContent = 'JOSE did not confirm the command. Check the execution feed before retrying.';
+      pending = null;
+    }
     health.textContent = [
       data.stopped ? 'Stopped' : 'Online', 'Uptime ' + data.uptimeSeconds + 's',
       'JOSE RAM ' + Math.round(data.rssMiB) + ' MiB',
@@ -112,9 +120,10 @@ export function createRuntimePanel(headers) {
     let saved = false;
     try {
       if (input) {
-        await request(input);
+        const result = await request(input);
         saved = true;
-        message.textContent = 'Saved';
+        if (result.id) pending = { id: result.id, deadline: Date.now() + 120000 };
+        message.textContent = result.accepted ? 'Sent to JOSE. Waiting for the worker.' : 'Saved';
       }
       render(await request());
     } catch (error) {

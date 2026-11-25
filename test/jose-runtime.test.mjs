@@ -136,3 +136,50 @@ test('tool catalog notices a changed contract and keeps the last snapshot on out
   assert.equal(runtime.status().tools.status, 'unavailable');
   assert.equal(runtime.status().tools.catalog[0].contract, updated);
 });
+
+test('Supabase relay serializes submissions and deduplicates a replay after restart', async t => {
+  const { env } = fixture(t, [], {
+    SUPABASE_URL: 'https://example.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'mock',
+  });
+  const { createRelayWorker } = await import('../netlify/functions/lib/jose-relay.mjs');
+  const rows = new Map();
+  const fetchImpl = async (url, init) => {
+    assert.equal(url.pathname, '/rest/v1/a2z_jarvis_kv');
+    const key = url.searchParams.get('key')?.slice(3);
+    if (!init.method) return Response.json(rows.has(key) ? [rows.get(key)] : []);
+    const row = JSON.parse(init.body);
+    if (init.method === 'PATCH') {
+      if (rows.get(key)?.etag !== url.searchParams.get('etag')?.slice(3)) return Response.json([]);
+      rows.set(key, row);
+      return Response.json([row]);
+    }
+    if (!url.searchParams.has('on_conflict') && rows.has(row.key)) {
+      return new Response(null, { status: 409 });
+    }
+    rows.set(row.key, row);
+    return new Response(null, { status: 201 });
+  };
+  let runtime = createRuntime(env);
+  const dashboard = { ...env, DASHBOARD_KEY: 'd'.repeat(20) };
+  const api = input => proxy(new Request('https://dashboard.example/api/jose-runtime', {
+    headers: { 'x-a2z-key': dashboard.DASHBOARD_KEY },
+    ...(input && { method: 'POST', body: JSON.stringify(input) }),
+  }), { env: dashboard, fetchImpl });
+  let poll = createRelayWorker(env, runtime, fetchImpl);
+  await poll();
+  const responses = await Promise.all([api(task), api(task)]);
+  assert.deepEqual(responses.map(response => response.status).sort(), [202, 409]);
+  const key = 'jose-relay:v1:command';
+  const pending = rows.get(key);
+  await poll();
+  assert.equal((await (await api()).json()).tasks.length, 1);
+  rows.set(key, pending);
+  runtime = createRuntime(env);
+  poll = createRelayWorker(env, runtime, fetchImpl);
+  await poll();
+  assert.equal(runtime.status().tasks.length, 1);
+  assert.equal((await (await api()).json()).relayReceipt.status, 201);
+  rows.set(key, { ...pending, data: { ...pending.data, signature: '0'.repeat(64) } });
+  await poll();
+  assert.equal(runtime.status().tasks.length, 1);
+});

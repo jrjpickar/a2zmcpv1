@@ -4,7 +4,7 @@ This patch adds a standalone Node service and a command center in the existing J
 
 ## Install on the VM
 
-Apply the ZIP at the root of the repository used to create the supplied A2Z MCP archive. Review the changes before publishing Netlify or changing the VM. No packages are installed by the JOSE installer. It expects systemd and Node 22 or newer at `/usr/bin/node`.
+Apply the ZIP at the root of the repository used to create the supplied A2Z MCP archive. Review the changes before publishing Netlify or changing the VM. No packages are installed by the JOSE installer. It expects systemd and Node 22 or newer at `/usr/bin/node` by default. Set `JOSE_NODE_BINARY` when invoking the installer to select a dedicated, root-owned Node executable.
 
 ```sh
 free -h
@@ -19,7 +19,17 @@ sudo journalctl -u a2z-jose.service -n 30 --no-pager
 
 Generate a dedicated bearer using `openssl rand -hex 32`. Set it as `JOSE_TOKEN` in the VM environment file and in the Netlify function environment. The sample config starts with no inference routes. Configure dedicated provider keys only after confirming the plan, model terms and privacy requirements. State is private to the service under `/var/lib/a2z-jose`, and includes public prompts and replies. The service retains up to 100 tasks and 100 event entries. System logs use the host journal and its existing retention policy.
 
-For the Netlify proxy, expose only the JOSE path over an existing authenticated HTTPS ingress, such as a Cloudflare Tunnel with a service-token Access policy. Route `/jose` to `http://127.0.0.1:8789` and keep any other paths on that hostname denied. Use a dedicated hostname or a dedicated path policy. Set `JOSE_RUNTIME_URL=https://<runtime-host>/jose` and, for Cloudflare Access, `JOSE_ACCESS_CLIENT_ID` and `JOSE_ACCESS_CLIENT_SECRET` in the function environment. Keep the runtime bearer enabled as a second layer. Do not forward the entire gateway or share the MCP bearer with the dashboard.
+### Supabase relay without inbound access
+
+Use the existing Supabase project already connected to A2Z MCP. The relay stores two namespaced rows in its existing private `a2z_jarvis_kv` table. The VM initiates outbound HTTPS and JOSE stays on `127.0.0.1:8789`. This mode uses the existing Netlify URL and needs no DNS, tunnel or schema migration on a project with that table.
+
+- On the VM, set `JOSE_RELAY=supabase`, `SUPABASE_URL`, and `SUPABASE_SERVICE_ROLE_KEY` in the root-owned JOSE environment file. Keep the existing `JOSE_TOKEN` and restart only JOSE after configuring it.
+- On Netlify, set or retain `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and the VM's matching `JOSE_TOKEN`, available to Functions. The proxy selects the relay automatically when these are set and `JOSE_RUNTIME_URL` is absent. To choose the relay explicitly, set `JOSE_RELAY=supabase` in the Functions environment.
+- Apply the patch to the repository before publishing the dashboard. After deployment, open the JOSE panel and check for live status before submitting a public-data task.
+
+The service role credentials stay on the server side. JOSE signs commands and status snapshots with its separate token. The snapshots contain the same local JOSE task data displayed in the dashboard, including public prompts and results. The worker polls every five seconds. The mailbox admits one command at a time, times commands out after two minutes, and persists processed command IDs locally to avoid replay after a crash. The dashboard shows a confirmation when the worker applies the command. If the relay is down, use the local authenticated JOSE endpoint from the VM for emergency controls.
+
+An authenticated direct HTTPS origin remains an optional alternative. It requires `JOSE_RUNTIME_URL=https://<runtime-host>/jose`, with any Cloudflare Access credentials in `JOSE_ACCESS_CLIENT_ID` and `JOSE_ACCESS_CLIENT_SECRET`. Keep the VM bearer enabled in either topology.
 
 For discovery, supply `JOSE_MCP_URL` (the existing HTTPS `/mcp` endpoint, or `http://127.0.0.1:8080/mcp` for the local server) and `JOSE_MCP_READ_TOKEN`. Use an existing scoped token with `report:read`. If provisioning a token, add its SHA-256 digest to the existing MCP server's `MCP_TOKENS` configuration and apply that server's normal config procedure. JOSE issues only `tools/list`.
 
@@ -74,6 +84,6 @@ This worker supports public-data text tasks, one-time scheduling via the API usi
 
 ## Validation
 
-Run `node --test test/jose-runtime.test.mjs` for the mocked tests covering the budget guard, approvals, rotation, quota exhaustion, persistence, emergency stop, proxy authorization and MCP contract drift. The local HTTP benchmark used real loopback requests and mocked inference on macOS x64, Node 24.22.3. The measured idle RSS was 44.8 MiB, and the sampled active peak was 82 MiB for ten tasks. The benchmark process also ran the HTTP client. The requested 80 MB active target and the actual VM capacity remain unverified. Live provider inference, VM network reachability, production ingress and browser behavior were not exercised.
+Run `node --test test/jose-runtime.test.mjs` for the mocked tests covering the budget guard, approvals, rotation, quota exhaustion, persistence, emergency stop, proxy authorization and MCP contract drift. The local HTTP benchmark used real loopback requests and mocked inference on macOS x64, Node 24.22.3. The measured idle RSS was 44.8 MiB, and the sampled active peak was 82 MiB for ten tasks. The benchmark process also ran the HTTP client. The requested 80 MB active target and the actual VM capacity remain unverified. Live provider inference and the published dashboard were not exercised. A separate VM check showed successful IPv6 HTTP connections to OpenRouter and Groq. The relay runs on the VM and published a verified signed status to the existing Supabase store while the MCP remained healthy.
 
-The focused suite passed 37 tests across JOSE, MCP scopes, MCP mail, JOSE Desk, and Alerts. The broader macOS run passed 190 of 197 tests. Five existing auto-update tests and one existing Bash error-line assertion failed. The seventh failure concerned the new installer's missing ERR trap, which was corrected and passed the subsequent deploy-script syntax and trap check.
+The focused suite passed 38 tests across JOSE, MCP scopes, MCP mail, JOSE Desk, and Alerts. The broader macOS run passed 190 of 197 tests. Five existing auto-update tests and one existing Bash error-line assertion failed. The seventh failure concerned the new installer's missing ERR trap, which was corrected and passed the subsequent deploy-script syntax and trap check.

@@ -10,7 +10,7 @@ EnvironmentFile=/etc/a2z-jose/runtime.env
 Environment=JOSE_STATE_DIR=/var/lib/a2z-jose
 StateDirectory=a2z-jose
 StateDirectoryMode=0700
-ExecStart=/usr/bin/node --max-old-space-size=48 --dns-result-order=ipv6first /opt/a2z-jose/runtime.mjs
+ExecStart=/opt/a2z-jose/node --max-old-space-size=48 --dns-result-order=ipv6first /opt/a2z-jose/jose/runtime.mjs
 Restart=on-failure
 RestartSec=5s
 MemoryHigh=105M
