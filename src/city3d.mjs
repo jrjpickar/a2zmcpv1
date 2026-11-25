@@ -93,8 +93,14 @@ export function mount(container, opts = {}) {
   resize();
   S.ro = new ResizeObserver(resize); S.ro.observe(container);
   const el = renderer.domElement;
-  el.addEventListener('pointermove', e => setHover(pick(e)));
-  el.addEventListener('pointerleave', () => setHover(null));
+  el.addEventListener('pointermove', event => {
+    // A high-rate pointer can report several positions between rendered frames.
+    S.hoverEvent = event.buttons ? null : event;
+  });
+  el.addEventListener('pointerleave', () => {
+    S.hoverEvent = null;
+    setHover(null);
+  });
   el.addEventListener('pointerdown', e => { S.down = [e.clientX, e.clientY]; });
   el.addEventListener('pointerup', e => {
     if (S.down && Math.hypot(e.clientX - S.down[0], e.clientY - S.down[1]) > 6) return;
@@ -130,8 +136,13 @@ function resize() {
   const view = Math.max(36, (aspect < 1 ? 46 : 58) / aspect);
   Object.assign(S.camera, { left: -view * aspect / 2, right: view * aspect / 2, top: view / 2, bottom: -view / 2 });
   S.camera.updateProjectionMatrix();
-  S.renderer.setSize(w, h, false);
-  S.renderer.domElement.style.width = w + 'px'; S.renderer.domElement.style.height = h + 'px';
+  if (S.rendererWidth !== w || S.rendererHeight !== h) {
+    S.rendererWidth = w;
+    S.rendererHeight = h;
+    S.renderer.setSize(w, h, false);
+    S.renderer.domElement.style.width = w + 'px';
+    S.renderer.domElement.style.height = h + 'px';
+  }
 }
 
 // ---------------- static scenery ----------------
@@ -463,11 +474,10 @@ function bubbles() {
   const { width: w, height: h } = S;
   for (const [key, b] of S.bubbles) {
     const pos = S.agentPos[key];
-    if (!pos) { b.el.hidden = true; continue; }
+    if (!pos) { if (!b.el.hidden) b.el.hidden = true; continue; }
     v3.set(pos.x, 0.2 + 2.1 * (S.agentSize[key] || 1.3) + 0.9, pos.z).project(S.camera);
     const x = (v3.x + 1) / 2 * w, y = (1 - v3.y) / 2 * h;
-    b.el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    b.el.hidden = !b.el.textContent || x < -100 || x > w + 100 || y < -40 || y > h + 80;
+    placeOverlay(b, x, y, !b.el.textContent || x < -100 || x > w + 100 || y < -40 || y > h + 80);
   }
 }
 function agentState(id, state = 'idle') {
@@ -986,11 +996,26 @@ const money = v => v == null ? '-' : Math.abs(v) >= 1e6 ? '$' + (v / 1e6).toFixe
 
 // ---------------- render loop ----------------
 const v3 = new THREE.Vector3();
+function placeOverlay(item, x, y, hidden) {
+  if (item.el.hidden !== hidden) item.el.hidden = hidden;
+  if (hidden) return;
+  const left = Math.round(x * 2) / 2;
+  const top = Math.round(y * 2) / 2;
+  if (left === item.left && top === item.top) return;
+  item.left = left;
+  item.top = top;
+  item.el.style.transform = `translate(-50%, -100%) translate(${left}px, ${top}px)`;
+}
+
 function loop() {
   if (!S) return;
   S.frame = frames.request(loop);
   if (!S.visible) return;
   const t = now();
+  if (S.hoverEvent) {
+    setHover(pick(S.hoverEvent));
+    S.hoverEvent = null;
+  }
   S.frameCount = (S.frameCount || 0) + 1;
   S.sampleStart ??= t;
   if (t - S.sampleStart >= .75) {
@@ -1016,8 +1041,8 @@ function loop() {
   for (const l of S.labelList) {
     v3.copy(l.anchor).project(S.camera);
     const x = (v3.x + 1) / 2 * w, y = (1 - v3.y) / 2 * h;
-    l.el.style.transform = `translate(-50%, -100%) translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    l.el.hidden = x < -60 || x > w + 60 || y < -20 || y > h + 60 || (l.tag && l.key !== S.selected && l.key !== S.hovered?.key);
+    placeOverlay(l, x, y, x < -60 || x > w + 60 || y < -20 || y > h + 60
+      || Boolean(l.tag && l.key !== S.selected && l.key !== S.hovered?.key));
   }
   bubbles();
 }

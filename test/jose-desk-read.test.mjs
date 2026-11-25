@@ -171,3 +171,12 @@ test('standalone browser resolves the address under a configured Desk operator, 
   assert.equal((await send(address, null, { 'x-a2z-key': 'wrong' })).status, 401);
   assert.equal(calls.length, 3);
 });
+
+test('Jose distinguishes Desk access storage and service authentication failures', async () => {
+  const { send } = fixtures(() => Response.json({ code: 'access_store' }, { status: 503 }));
+  assert.match((await (await send(address)).json()).answer, /BLOBS_SITE_ID and BLOBS_TOKEN/);
+  const auth = fixtures(() => Response.json({ error: 'Unauthorized' }, { status: 401 }));
+  assert.match((await (await auth.send(address)).json()).answer, /ESTIMATING_ACTION_KEY matches the Desk’s JARVIS_ACTION_KEY/);
+  const stale = fixtures(() => Response.json({ error: 'Invalid opportunity request' }, { status: 400 }));
+  assert.match((await (await stale.send(address)).json()).answer, /deploy the updated Desk patch before MCP/);
+});

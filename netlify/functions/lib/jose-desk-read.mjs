@@ -90,16 +90,43 @@ export async function deskRead(args, { env, fetchImpl, actor, signal }) {
   if (!actor) return { answer: 'Desk access is not configured for this browser sign-in.', state: null };
   if (args.choicesPending) return { answer: 'Which Desk record do you mean? Reply with its number or give me a more specific job name.', state: args.state };
   if (!args.query && !args.jobId && !args.view.startsWith('list_')) return { answer: 'Which job? Give me the name or street address.', state };
+  const pinnedState = { ...state, ...(args.jobId ? { jobId: args.jobId } : {}) };
+  const failed = (answer, code) => {
+    console.info('Jose Desk lookup failed', { reason: code });
+    return { answer, state: pinnedState };
+  };
+  let base;
   try {
-    const base = new URL(env.ESTIMATING_URL);
-    if (base.protocol !== 'https:' || base.username || base.password || !env.ESTIMATING_ACTION_KEY) throw new Error();
+    base = new URL(env.ESTIMATING_URL);
+    if (base.protocol !== 'https:' || base.username || base.password || !env.ESTIMATING_ACTION_KEY?.trim()) throw new Error();
+  } catch {
+    return failed('The Desk connection is missing or invalid in MCP. Check ESTIMATING_URL and ESTIMATING_ACTION_KEY.', 'bridge_config');
+  }
+  try {
     const response = await fetchImpl(new URL('/.netlify/functions/jarvis-actions', base), {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-jarvis-action-key': env.ESTIMATING_ACTION_KEY },
       body: JSON.stringify({ action: 'read_job', actor, args }), redirect: 'error',
-      signal: AbortSignal.any([AbortSignal.timeout(5500), ...(signal ? [signal] : [])]),
+      signal: AbortSignal.any([AbortSignal.timeout(10500), ...(signal ? [signal] : [])]),
     });
     if (response.status === 403) return { answer: 'This sign-in does not have Estimating Desk access.', state: null };
-    if (!response.ok) throw new Error();
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      const messages = {
+        access_store: 'The Desk could not read its access list. Check the Desk’s BLOBS_SITE_ID and BLOBS_TOKEN and confirm its access list is initialized.',
+        access_timeout: 'The Desk access check timed out. I could not verify access.',
+        highlevel_config: 'The Desk is missing its GHL_PIT_TOKEN.',
+        highlevel_auth: 'HighLevel rejected the Desk credential. Check its opportunity and location access.',
+        highlevel_unavailable: 'HighLevel returned an error while the Desk was reading the record.',
+        lookup_timeout: 'The Estimating Desk lookup timed out. I could not verify the record.',
+        search_limit: 'The Desk search exceeded its page limit. If you have the HighLevel opportunity ID, try “job ID” followed by that ID.',
+        invalid_lookup: 'The Desk could not use that lookup. Try a job name or street address.',
+        lookup_failed: 'The Desk encountered an error reading that record. I could not verify it.',
+      };
+      if (Object.hasOwn(messages, body?.code)) return failed(messages[body.code], body.code);
+      if (response.status === 401) return failed('The Desk rejected the connection key. Check that MCP’s ESTIMATING_ACTION_KEY matches the Desk’s JARVIS_ACTION_KEY.', 'bridge_key');
+      if ([400, 404, 405, 422].includes(response.status)) return failed('The configured Desk did not accept the lookup. Check ESTIMATING_URL and deploy the updated Desk patch before MCP.', 'bridge_version');
+      throw new Error();
+    }
     const result = await response.json();
     if (result.missing) return { answer: 'I could not find a matching record in the Estimating Desk. What is the job name or street address?', state };
     const choices = result.matches || result.page;
@@ -119,7 +146,8 @@ export async function deskRead(args, { env, fetchImpl, actor, signal }) {
       catch { return false; }
     }).slice(0, 8);
     return { answer, links, verified: true, state: { ...state, jobId: result.job.id, hasMore } };
-  } catch {
-    return { answer: 'The Estimating Desk lookup is unavailable right now. I could not verify the record.', state: { ...state, ...(args.jobId ? { jobId: args.jobId } : {}) } };
+  } catch (error) {
+    if (error.name === 'TimeoutError') return failed('The Estimating Desk lookup timed out. I could not verify the record.', 'bridge_timeout');
+    return failed('The Estimating Desk lookup is unavailable right now. I could not verify the record.', 'bridge_unavailable');
   }
 }
